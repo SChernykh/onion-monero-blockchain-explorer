@@ -5,11 +5,11 @@
 
 
     {{#have_prev_hash}}
-    <H5>Previous block: <a href="/block/{{prev_hash}}">{{prev_hash}}</a></H5>
+    <H5>Previous block: <a href="/{{base_url}}/block/{{prev_hash}}">{{prev_hash}}</a></H5>
     {{/have_prev_hash}}
 
     {{#have_next_hash}}
-    <H5>Next block: <a href="/block/{{next_hash}}">{{next_hash}}</a></H5>
+    <H5>Next block: <a href="/{{base_url}}/block/{{next_hash}}">{{next_hash}}</a></H5>
     {{/have_next_hash}}
 
 
@@ -34,7 +34,7 @@
             <td>PoW hash:</td><td>{{blk_pow_hash}}</td>
             <td>Difficulty:</td><td>{{blk_difficulty}}</td>
             {{#is_randomx}}
-                <td colspan="2"><a href="/randomx/{{blk_height}}">RandomX source code</a></td>
+                <td colspan="2"><a href="/{{base_url}}/randomx/{{blk_height}}">RandomX source code</a></td>
             {{/is_randomx}}
             {{^is_randomx}}
                 <td></td>
@@ -53,7 +53,7 @@
         </tr>
         {{#coinbase_txs}}
             <tr>
-                <td><a href="/tx/{{hash}}">{{hash}}</a>
+                <td><a href="/{{base_url}}/tx/{{hash}}">{{hash}}</a>
                 <td>{{sum_outputs}}</td>
                 <td>{{tx_size}}</td>
                 <td>{{version}}</td>
@@ -77,7 +77,7 @@
             </tr>
             {{#blk_txs}}
                 <tr>
-                    <td><a href="/tx/{{hash}}">{{hash}}</a></td>
+                    <td><a href="/{{base_url}}/tx/{{hash}}">{{hash}}</a></td>
                     <td>{{sum_outputs}}</td>
                     <td>{{fee_micro}}</td>
                     <td>{{no_inputs}}/{{no_outputs}}</td>                    
@@ -91,8 +91,8 @@
 
     {{#enable_as_hex}}
         <h5 style="margin-top:1px">
-            <a href="/blockhex/{{blk_height}}">Block as hex</a>
-            | <a href="/blockhexcomplete/{{blk_height}}">Complete block as hex</a>
+            <a href="/{{base_url}}/blockhex/{{blk_height}}">Block as hex</a>
+            | <a href="/{{base_url}}/blockhexcomplete/{{blk_height}}">Complete block as hex</a>
         </h5>
     {{/enable_as_hex}}
 

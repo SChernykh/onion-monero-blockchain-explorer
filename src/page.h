@@ -948,6 +948,8 @@ mempool(bool add_header_and_footer = false, uint64_t no_of_mempool_tx = 25)
 
     context["partial_mempool_shown"] = true;
 
+    add_css_style(context);
+
     // render the page
     return mstch::render(template_file["mempool"], context);
 }
@@ -6923,6 +6925,8 @@ get_footer()
 void
 add_css_style(mstch::map& context)
 {
+    context["base_url"] = std::string("explorer");
+
     // add_css_style goes to every subpage so here we mark
 
     context["css_styles"] = mstch::lambda{[&](const std::string& text) -> mstch::node {
