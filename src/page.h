@@ -877,6 +877,9 @@ mempool(bool add_header_and_footer = false, uint64_t no_of_mempool_tx = 25)
     // get reference to blocks template map to be field below
     mstch::array& txs = boost::get<mstch::array>(context["mempooltxs"]);
 
+    //get current server timestamp
+    server_timestamp = std::time(nullptr);
+
     uint64_t local_copy_server_timestamp = server_timestamp;
 
     // for each transaction in the memory pool
@@ -965,6 +968,9 @@ altblocks()
             {"stagenet"             , stagenet},
             {"blocks"               , mstch::array()}
     };
+
+    //get current server timestamp
+    server_timestamp = std::time(nullptr);
 
     uint64_t local_copy_server_timestamp = server_timestamp;
 
@@ -1068,6 +1074,9 @@ show_block(uint64_t _blk_height)
 
     // get block timestamp in user friendly format
     string blk_timestamp = xmreg::timestamp_to_str_gm(blk.timestamp);
+
+    //get current server timestamp
+    server_timestamp = std::time(nullptr);
 
     // get age of the block relative to the server time
     pair<string, string> age = get_age(server_timestamp, blk.timestamp);
@@ -1294,6 +1303,8 @@ show_randomx(uint64_t _blk_height)
 string
 show_tx(string tx_hash_str, uint16_t with_ring_signatures = 0, bool refresh_page = false)
 {
+    //get current server timestamp
+    server_timestamp = std::time(nullptr);
 
     // parse tx hash string to hash object
     crypto::hash tx_hash;
@@ -1886,6 +1897,8 @@ show_my_outputs(string tx_hash_str,
                 string domain,
                 bool tx_prove = false)
 {
+    //get current server timestamp
+    server_timestamp = std::time(nullptr);
 
     // remove white characters
     boost::trim(tx_hash_str);
@@ -2761,6 +2774,9 @@ show_rawtx()
 string
 show_checkrawtx(string raw_tx_data, string action)
 {
+    //get current server timestamp
+    server_timestamp = std::time(nullptr);
+
     clean_post_data(raw_tx_data);
 
     string decoded_raw_tx_data = epee::string_encoding::base64_decode(raw_tx_data);
@@ -3400,6 +3416,9 @@ show_checkrawtx(string raw_tx_data, string action)
 string
 show_pushrawtx(string raw_tx_data, string action)
 {
+    //get current server timestamp
+    server_timestamp = std::time(nullptr);
+
     clean_post_data(raw_tx_data);
 
     // initalize page template context map
@@ -6071,6 +6090,9 @@ mark_real_mixins_on_timescales(
 mstch::map
 construct_tx_context(transaction tx, uint16_t with_ring_signatures = 0)
 {
+    //get current server timestamp
+    server_timestamp = std::time(nullptr);
+
     tx_details txd = get_tx_details(tx);
 
     const crypto::hash& tx_hash = txd.hash;
@@ -6530,6 +6552,9 @@ construct_mstch_mixin_timescales(
         uint64_t& max_mix_timestamp
 )
 {
+    //get current server timestamp
+    server_timestamp = std::time(nullptr);
+
     mstch::array mixins_timescales;
 
     double timescale_scale {0.0};     // size of one '_' in days
