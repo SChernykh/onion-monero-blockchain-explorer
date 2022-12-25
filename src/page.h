@@ -2093,8 +2093,7 @@ show_my_outputs(string tx_hash_str,
     string pid_str   = pod_to_hex(txd.payment_id);
     string pid8_str  = pod_to_hex(txd.payment_id8);
 
-    string shortcut_url = tx_prove 
-                    ? string("/prove") : string("/myoutputs")
+    string shortcut_url = (tx_prove ? string("/explorer/prove") : string("/explorer/myoutputs"))
                           + '/' + tx_hash_str
                           + '/' + xmr_address_str
                           + '/' + viewkey_str;
