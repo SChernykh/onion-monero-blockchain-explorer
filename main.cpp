@@ -55,6 +55,7 @@ main(int ac, const char* av[])
 
     auto port_opt                      = opts.get_option<string>("port");
     auto bindaddr_opt                  = opts.get_option<string>("bindaddr");
+    auto template_path_opt             = opts.get_option<string>("template-path");   
     auto bc_path_opt                   = opts.get_option<string>("bc-path");
     auto daemon_url_opt                = opts.get_option<string>("daemon-url");
     auto ssl_crt_file_opt              = opts.get_option<string>("ssl-crt-file");
@@ -104,6 +105,12 @@ main(int ac, const char* av[])
     bool enable_json_api              {*enable_json_api_opt};
     bool enable_as_hex                {*enable_as_hex_opt};
     bool enable_emission_monitor      {*enable_emission_monitor_opt};
+
+    //temprorary disable randomx
+    if (enable_randomx == true) {
+        cout << "Support for randomx code is disabled due to issues with it"<< endl;
+        enable_randomx = false;
+    }
 
     // set  monero log output level
     uint32_t log_level = 0;
@@ -315,6 +322,7 @@ main(int ac, const char* av[])
                           *testnet_url,
                           *stagenet_url,
                           *mainnet_url,
+                          *template_path_opt,
                           daemon_rpc_login);
 
     // crow instance

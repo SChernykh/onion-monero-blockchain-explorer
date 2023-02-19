@@ -42,38 +42,15 @@ extern "C" void me_rx_slow_hash(const uint64_t mainheight, const uint64_t seedhe
                              char *hash, int miners, int is_alt);
 //extern "C" void me_rx_reorg(const uint64_t split_height);
 
-extern  __thread randomx_vm *rx_vm;
+extern  __thread randomx_vm *main_vm_full;
 
 #include <algorithm>
 #include <limits>
 #include <ctime>
 #include <future>
 #include <type_traits>
+#include <filesystem>
 
-
-#define TMPL_DIR                    "./templates"
-#define TMPL_PARIALS_DIR            TMPL_DIR "/partials"
-#define TMPL_CSS_STYLES             TMPL_DIR "/css/style.css"
-#define TMPL_INDEX                  TMPL_DIR "/index.html"
-#define TMPL_INDEX2                 TMPL_DIR "/index2.html"
-#define TMPL_MEMPOOL                TMPL_DIR "/mempool.html"
-#define TMPL_ALTBLOCKS              TMPL_DIR "/altblocks.html"
-#define TMPL_MEMPOOL_ERROR          TMPL_DIR "/mempool_error.html"
-#define TMPL_HEADER                 TMPL_DIR "/header.html"
-#define TMPL_FOOTER                 TMPL_DIR "/footer.html"
-#define TMPL_BLOCK                  TMPL_DIR "/block.html"
-#define TMPL_RANDOMX                TMPL_DIR "/randomx.html"
-#define TMPL_TX                     TMPL_DIR "/tx.html"
-#define TMPL_ADDRESS                TMPL_DIR "/address.html"
-#define TMPL_MY_OUTPUTS             TMPL_DIR "/my_outputs.html"
-#define TMPL_SEARCH_RESULTS         TMPL_DIR "/search_results.html"
-#define TMPL_MY_RAWTX               TMPL_DIR "/rawtx.html"
-#define TMPL_MY_CHECKRAWTX          TMPL_DIR "/checkrawtx.html"
-#define TMPL_MY_PUSHRAWTX           TMPL_DIR "/pushrawtx.html"
-#define TMPL_MY_RAWKEYIMGS          TMPL_DIR "/rawkeyimgs.html"
-#define TMPL_MY_CHECKRAWKEYIMGS     TMPL_DIR "/checkrawkeyimgs.html"
-#define TMPL_MY_RAWOUTPUTKEYS       TMPL_DIR "/rawoutputkeys.html"
-#define TMPL_MY_CHECKRAWOUTPUTKEYS  TMPL_DIR "/checkrawoutputkeys.html"
 
 #define ONIONEXPLORER_RPC_VERSION_MAJOR 1
 #define ONIONEXPLORER_RPC_VERSION_MINOR 2
@@ -495,6 +472,32 @@ string js_html_files_all_in_one;
 // read operation in OS
 map<string, string> template_file;
 
+std::string TMPL_DIR;
+std::string TMPL_PARIALS_DIR;
+std::string TMPL_CSS_STYLES;
+std::string TMPL_INDEX;
+std::string TMPL_INDEX2;
+std::string TMPL_MEMPOOL;
+std::string TMPL_ALTBLOCKS;
+std::string TMPL_MEMPOOL_ERROR;
+std::string TMPL_HEADER;
+std::string TMPL_FOOTER;
+std::string TMPL_BLOCK;
+std::string TMPL_RANDOMX;
+std::string TMPL_TX;
+std::string TMPL_ADDRESS;
+std::string TMPL_MY_OUTPUTS;
+std::string TMPL_SEARCH_RESULTS;
+std::string TMPL_MY_RAWTX;
+std::string TMPL_MY_CHECKRAWTX;
+std::string TMPL_MY_PUSHRAWTX;
+std::string TMPL_MY_RAWKEYIMGS;
+std::string TMPL_MY_CHECKRAWKEYIMGS;
+std::string TMPL_MY_PUSHRAWKEYIMGS;
+std::string TMPL_MY_RAWOUTPUTKEYS;
+std::string TMPL_MY_CHECKRAWOUTPUTKEYS;
+
+
 public:
 
 page(MicroCore* _mcore,
@@ -514,6 +517,7 @@ page(MicroCore* _mcore,
      string _testnet_url,
      string _stagenet_url,
      string _mainnet_url,
+     string template_dir,
      rpccalls::login_opt _daemon_rpc_login)
         : mcore {_mcore},
           core_storage {_core_storage},
@@ -539,6 +543,40 @@ page(MicroCore* _mcore,
     stagenet = nettype == cryptonote::network_type::STAGENET;
 
     no_of_mempool_tx_of_frontpage = 25;
+
+
+
+    if (!template_dir.empty() && boost::filesystem::exists(template_dir))
+    {
+        TMPL_DIR = template_dir;
+    }else
+    {
+        cerr << "Template directory " << template_dir << " does not exist.  Please use --template-path option to specify template path." << endl;
+        exit(1);
+    }
+
+    TMPL_PARIALS_DIR = TMPL_DIR + "/partials";
+    TMPL_CSS_STYLES = TMPL_DIR + "/css/style.css";
+    TMPL_INDEX = TMPL_DIR + "/index.html";
+    TMPL_INDEX2 = TMPL_DIR + "/index2.html";
+    TMPL_MEMPOOL = TMPL_DIR + "/mempool.html";
+    TMPL_ALTBLOCKS = TMPL_DIR + "/altblocks.html";
+    TMPL_MEMPOOL_ERROR = TMPL_DIR + "/mempool_error.html";
+    TMPL_HEADER = TMPL_DIR + "/header.html";
+    TMPL_FOOTER = TMPL_DIR + "/footer.html";
+    TMPL_BLOCK = TMPL_DIR + "/block.html";
+    TMPL_RANDOMX = TMPL_DIR + "/randomx.html";
+    TMPL_TX = TMPL_DIR + "/tx.html";
+    TMPL_ADDRESS = TMPL_DIR + "/address.html";
+    TMPL_MY_OUTPUTS = TMPL_DIR + "/my_outputs.html";
+    TMPL_SEARCH_RESULTS = TMPL_DIR + "/search_results.html";
+    TMPL_MY_RAWTX = TMPL_DIR + "/rawtx.html";
+    TMPL_MY_CHECKRAWTX = TMPL_DIR + "/checkrawtx.html";
+    TMPL_MY_PUSHRAWTX = TMPL_DIR + "/pushrawtx.html";
+    TMPL_MY_RAWKEYIMGS = TMPL_DIR + "/rawkeyimgs.html";
+    TMPL_MY_CHECKRAWKEYIMGS = TMPL_DIR + "/checkrawkeyimgs.html";
+    TMPL_MY_RAWOUTPUTKEYS = TMPL_DIR + "/rawoutputkeys.html";
+    TMPL_MY_CHECKRAWOUTPUTKEYS = TMPL_DIR + "/checkrawoutputkeys.html";
 
     // read template files for all the pages
     // into template_file map
@@ -7006,18 +7044,18 @@ get_randomx_code(uint64_t blk_height,
 
     std::lock_guard<std::mutex> lk {mtx};
 
-    if (!rx_vm)
+    if (!main_vm_full)
     {
 
         crypto::hash block_hash;
 
-        // this will create rx_vm instance if one
+        // this will create main_vm_full instance if one
         // does not exist
         me_get_block_longhash(core_storage, blk, block_hash, blk_height, 0);
 
-        if (!rx_vm)
+        if (!main_vm_full)
         {
-            cerr << "rx_vm is still null!";
+            cerr << "main_vm_full is still null!";
             return {};
         }
     }
@@ -7028,32 +7066,32 @@ get_randomx_code(uint64_t blk_height,
     alignas(16) uint64_t tempHash[8];
     blake2b(tempHash, sizeof(tempHash), bd.data(), bd.size(), nullptr, 0); 
 
-    rx_vm->initScratchpad(&tempHash);
-    rx_vm->resetRoundingMode();
+    main_vm_full->initScratchpad(&tempHash);
+    main_vm_full->resetRoundingMode();
 
     for (int chain = 0; chain < RANDOMX_PROGRAM_COUNT - 1; ++chain) 
     {
-        rx_vm->run(&tempHash);
+        main_vm_full->run(&tempHash);
 
         blake2b(tempHash, sizeof(tempHash), 
-                rx_vm->getRegisterFile(), 
+                main_vm_full->getRegisterFile(),
                 sizeof(randomx::RegisterFile), nullptr, 0); 
 
         rx_code.push_back({});
 
-        rx_code.back().prog = rx_vm->getProgram();
-    	rx_code.back().reg_file = *(rx_vm->getRegisterFile());
+        rx_code.back().prog = main_vm_full->getProgram();
+        rx_code.back().reg_file = *(main_vm_full->getRegisterFile());
     }   
 
-    rx_vm->run(&tempHash);
+    main_vm_full->run(&tempHash);
 
     rx_code.push_back({});
 
-    rx_code.back().prog = rx_vm->getProgram();
-    rx_code.back().reg_file = *(rx_vm->getRegisterFile());
+    rx_code.back().prog = main_vm_full->getProgram();
+    rx_code.back().reg_file = *(main_vm_full->getRegisterFile());
 
     //crypto::hash res2;
-    //rx_vm->getFinalResult(res2.data, RANDOMX_HASH_SIZE);
+    //main_vm_full->getFinalResult(res2.data, RANDOMX_HASH_SIZE);
     //cout << "pow2: " << pod_to_hex(res2) << endl;
 
     return rx_code;
