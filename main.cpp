@@ -106,12 +106,6 @@ main(int ac, const char* av[])
     bool enable_as_hex                {*enable_as_hex_opt};
     bool enable_emission_monitor      {*enable_emission_monitor_opt};
 
-    //temprorary disable randomx
-    if (enable_randomx == true) {
-        cout << "Support for randomx code is disabled due to issues with it"<< endl;
-        enable_randomx = false;
-    }
-
     // set  monero log output level
     uint32_t log_level = 0;
     mlog_configure("", true);
@@ -349,11 +343,6 @@ main(int ac, const char* av[])
         return myxmr::htmlresponse(xmrblocks.show_block(block_height));
     });
     
-    CROW_ROUTE(app, "/randomx/<uint>")
-    ([&](size_t block_height) {
-        return myxmr::htmlresponse(xmrblocks.show_randomx(block_height));
-    });
-
     CROW_ROUTE(app, "/block/<string>")
     ([&](string block_hash) {
         return myxmr::htmlresponse(

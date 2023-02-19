@@ -33,17 +33,6 @@
 
 #include "../ext/mstch/src/visitor/render_node.hpp"
 
-extern "C" uint64_t me_rx_seedheight(const uint64_t height);
-
-// forked version of the rx_slow_hash from monero
-extern "C" void me_rx_slow_hash(const uint64_t mainheight, const uint64_t seedheight,
-                             const char *seedhash,
-                             const void *data, size_t length,
-                             char *hash, int miners, int is_alt);
-//extern "C" void me_rx_reorg(const uint64_t split_height);
-
-extern  __thread randomx_vm *main_vm_full;
-
 #include <algorithm>
 #include <limits>
 #include <ctime>
@@ -235,8 +224,6 @@ struct randomx_status
     }
 };
 
-// modified version of the get_block_longhash
-// from monero to use me_rx_slow_hash
 bool
 me_get_block_longhash(const Blockchain *pbc,
                    const block& b,
@@ -259,7 +246,7 @@ me_get_block_longhash(const Blockchain *pbc,
 
     if (pbc != NULL)
     {
-      seed_height = me_rx_seedheight(height);
+      seed_height = rx_seedheight(height);
       hash = pbc->get_pending_block_id_by_height(seed_height);
       main_height = pbc->get_current_blockchain_height();
     } else
@@ -269,9 +256,7 @@ me_get_block_longhash(const Blockchain *pbc,
       main_height = 0;
     }
 
-    me_rx_slow_hash(main_height, seed_height,
-                    hash.data, bd.data(),
-                    bd.size(), res.data, miners, 0);
+    rx_slow_hash(hash.data, bd.data(), bd.size(), res.data);
   }
   return true;
 }
@@ -1272,70 +1257,6 @@ show_block(string _blk_hash)
     }
 
     return show_block(blk_height);
-}
-
-string
-show_randomx(uint64_t _blk_height)
-{
-    if (enable_randomx == false)
-    {
-        return "RandomX code generation disabled! Use --enable-randomx"
-               " flag to enable if.";
-    }
-
-    // get block at the given height i
-    block blk;
-
-    uint64_t current_blockchain_height
-            =  core_storage->get_current_blockchain_height();
-
-    if (_blk_height > current_blockchain_height)
-    {
-        cerr << "Cant get block: " << _blk_height
-             << " since its higher than current blockchain height"
-             << " i.e., " <<  current_blockchain_height
-             << endl;
-        return fmt::format("Cant get block {:d} since its higher than current blockchain height!",
-                           _blk_height);
-    }
-
-    if (!mcore->get_block_by_height(_blk_height, blk))
-    {
-        cerr << "Cant get block: " << _blk_height << endl;
-        return fmt::format("Cant get block {:d}!", _blk_height);
-    }
-
-    // get block's hash
-    crypto::hash blk_hash = core_storage->get_block_id_by_height(_blk_height);
-    
-    string blk_hash_str  = pod_to_hex(blk_hash);
-
-
-    auto rx_code = get_randomx_code(_blk_height,
-                                    blk, blk_hash);
-
-    mstch::array rx_code_str = mstch::array{};
-    int code_idx {1};
-
-    for (auto& rxc: rx_code)
-    {
-        mstch::map rx_map = rxc.get_mstch();
-        rx_map["first_program"] = (code_idx == 1);
-        rx_map["rx_code_idx"] = code_idx++;
-        rx_code_str.push_back(rx_map);
-    }
-
-    mstch::map context {
-            {"testnet"              , testnet},
-            {"stagenet"             , stagenet},
-            {"blk_hash"             , blk_hash_str},
-            {"blk_height"           , _blk_height},
-            {"rx_codes"             , rx_code_str},
-    };
-    
-    add_css_style(context);
-
-    return mstch::render(template_file["randomx"], context);
 }
 
 string
@@ -7029,72 +6950,6 @@ get_tx(string const& tx_hash_str,
     }
 
     return true;
-}
-
-vector<randomx_status>
-get_randomx_code(uint64_t blk_height, 
-                 block const& blk,
-                 crypto::hash const& blk_hash)
-{
-    static std::mutex mtx;
-
-    vector<randomx_status> rx_code;
-
-    blobdata bd = get_block_hashing_blob(blk);
-
-    std::lock_guard<std::mutex> lk {mtx};
-
-    if (!main_vm_full)
-    {
-
-        crypto::hash block_hash;
-
-        // this will create main_vm_full instance if one
-        // does not exist
-        me_get_block_longhash(core_storage, blk, block_hash, blk_height, 0);
-
-        if (!main_vm_full)
-        {
-            cerr << "main_vm_full is still null!";
-            return {};
-        }
-    }
-
-
-     // based on randomx calculate hash
-    // the hash is seed used to generated scrachtpad and program
-    alignas(16) uint64_t tempHash[8];
-    blake2b(tempHash, sizeof(tempHash), bd.data(), bd.size(), nullptr, 0); 
-
-    main_vm_full->initScratchpad(&tempHash);
-    main_vm_full->resetRoundingMode();
-
-    for (int chain = 0; chain < RANDOMX_PROGRAM_COUNT - 1; ++chain) 
-    {
-        main_vm_full->run(&tempHash);
-
-        blake2b(tempHash, sizeof(tempHash), 
-                main_vm_full->getRegisterFile(),
-                sizeof(randomx::RegisterFile), nullptr, 0); 
-
-        rx_code.push_back({});
-
-        rx_code.back().prog = main_vm_full->getProgram();
-        rx_code.back().reg_file = *(main_vm_full->getRegisterFile());
-    }   
-
-    main_vm_full->run(&tempHash);
-
-    rx_code.push_back({});
-
-    rx_code.back().prog = main_vm_full->getProgram();
-    rx_code.back().reg_file = *(main_vm_full->getRegisterFile());
-
-    //crypto::hash res2;
-    //main_vm_full->getFinalResult(res2.data, RANDOMX_HASH_SIZE);
-    //cout << "pow2: " << pod_to_hex(res2) << endl;
-
-    return rx_code;
 }
 
 template <typename T, typename... Args>

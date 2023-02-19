@@ -19,8 +19,6 @@ set(SOURCE_FILES
         MempoolStatus.cpp 
         MempoolStatus.h)
 
-add_subdirectory(crypto)
-
 
 # make static library called libmyxrm
 # that we are going to link to
@@ -29,5 +27,5 @@ add_library(myxrm
 		STATIC
 		${SOURCE_FILES})
 
-target_link_libraries(myxrm mycrypto)
+target_link_libraries(myxrm)
 
