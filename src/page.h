@@ -2119,7 +2119,7 @@ show_my_outputs(string tx_hash_str,
     {
         cerr << "Cant get derived key for: "  << "\n"
              << "pub_tx_key: " << pub_key << " and "
-             << "prv_view_key" << prv_view_key << endl;
+             << "prv_view_key ***" << endl;
 
         return string("Cant get key_derivation");
     }
@@ -2132,7 +2132,7 @@ show_my_outputs(string tx_hash_str,
         {
             cerr << "Cant get derived key for: "  << "\n"
                  << "pub_tx_key: " << txd.additional_pks[i] << " and "
-                 << "prv_view_key" << prv_view_key << endl;
+                 << "prv_view_key ***" << endl;
 
             return string("Cant get key_derivation");
         }
@@ -2435,7 +2435,7 @@ show_my_outputs(string tx_hash_str,
                 {
                     cerr << "Cant get derived key for: "  << "\n"
                          << "pub_tx_key: " << mixin_tx_pub_key << " and "
-                         << "prv_view_key" << prv_view_key << endl;
+                         << "prv_view_key ***" << endl;
 
                     continue;
                 }
@@ -2447,7 +2447,7 @@ show_my_outputs(string tx_hash_str,
                     {
                         cerr << "Cant get derived key for: "  << "\n"
                              << "pub_tx_key: " << mixin_additional_tx_pub_keys[i]
-                             << " and prv_view_key" << prv_view_key << endl;
+                             << " and prv_view_key ***" << endl;
 
                         continue;
                     }
@@ -3166,7 +3166,7 @@ show_checkrawtx(string raw_tx_data, string action)
                 return boost::get<string>(tx_context["error_msg"]);
             }
 
-            tx_context["tx_prv_key"] =  fmt::format("{:s}", ptx.tx_key);
+            tx_context["tx_prv_key"] = string{};
 
             mstch::array destination_addresses;
             vector<uint64_t> real_ammounts;
@@ -3719,8 +3719,7 @@ show_checkrawkeyimgs(string raw_data, string viewkey_str)
 
     context.insert({"address"        , REMOVE_HASH_BRAKETS(
             xmreg::print_address(address_info, nettype))});
-    context.insert({"viewkey"        , REMOVE_HASH_BRAKETS(
-            fmt::format("{:s}", prv_view_key))});
+    context.insert({"viewkey"        , string{}});
     context.insert({"has_total_xmr"  , false});
     context.insert({"total_xmr"      , string{}});
     context.insert({"key_imgs"       , mstch::array{}});
@@ -3853,7 +3852,7 @@ show_checkcheckrawoutput(string raw_data, string viewkey_str)
 
     context.insert({"address"        , REMOVE_HASH_BRAKETS(
             xmreg::print_address(address_info, nettype))});
-    context.insert({"viewkey"        , pod_to_hex(prv_view_key)});
+    context.insert({"viewkey"        , string{}});
     context.insert({"has_total_xmr"  , false});
     context.insert({"total_xmr"      , string{}});
     context.insert({"output_keys"    , mstch::array{}});
@@ -5583,7 +5582,7 @@ json_outputs(string tx_hash_str,
     // matches to what was used to produce response.
     j_data["tx_hash"]  = pod_to_hex(txd.hash);
     j_data["address"]  = pod_to_hex(address_info.address);
-    j_data["viewkey"]  = pod_to_hex(prv_view_key);
+    j_data["viewkey"]  = string{};
     j_data["tx_prove"] = tx_prove;
     j_data["tx_confirmations"] = txd.no_confirmations;
     j_data["tx_timestamp"] = tx_timestamp;
@@ -5767,7 +5766,7 @@ json_outputsblocks(string _limit,
     // check if submited data in the request
     // matches to what was used to produce response.
     j_data["address"]  = pod_to_hex(address_info.address);
-    j_data["viewkey"]  = pod_to_hex(prv_view_key);
+    j_data["viewkey"]  = string{};
     j_data["limit"]    = _limit;
     j_data["height"]   = height;
     j_data["mempool"]  = in_mempool_aswell;
