@@ -300,21 +300,6 @@ MicroCore::get_blk_timestamp(uint64_t blk_height)
     return blk.timestamp;
 }
 
-
-/**
- * De-initialized Blockchain.
- *
- * since blockchain is opened as MDB_RDONLY
- * need to manually free memory taken on heap
- * by BlockchainLMDB
- */
-MicroCore::~MicroCore()
-{
-    //m_blockchain_storage.get_db().close();
-    delete &core_storage->blockchain.get_db();
-}
-
-
 bool
 init_blockchain(const string& path,
                 MicroCore& mcore,

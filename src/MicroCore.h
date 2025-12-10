@@ -76,9 +76,6 @@ namespace xmreg
 
         hw::device* const
         get_device() const;
-
-        virtual ~MicroCore();
-
     };
 
 

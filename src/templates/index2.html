@@ -73,37 +73,43 @@
 
     <h4 style="font-size: 14px; margin-top: 0px">(Median size of 100 blocks: {{blk_size_median}} kB)</h4>
 
-<div class="center">
-	<table class="center">
-	<tr>
-		<td>height</td>
-		<td>age {{age_format}}<!--(Δm)--></td>
-		<td>size [kB]<!--(Δm)--></td>
-		<td>transaction hash</td>
-		<td>fee [&#181;&#x271]</td>
-		<td>outputs</td>
-		<td>in/out</td>
-		<td>tx size [kB]</td>
-	</tr>
-	{{#txs}}
-	<tr>
-		<td><a href="/{{base_url}}/block/{{height}}">{{height}}</a></td>
-		<td>{{age}}</td>
-		<td>{{blk_size}}</td>
-		<td><a href="/{{base_url}}/tx/{{hash}}">{{hash}}</a></td>
-		<td>{{fee_micro}}</td>
-		<td>{{sum_outputs_short}}</td>
-		<td>{{no_inputs}}/{{no_outputs}}</td>
-		<td>{{tx_size_short}}</td>
-	</tr>
-	{{/txs}}
-	</table>
-	<div id="pages" class="center" style="text-align: center;">
-		{{^is_page_zero}}
-		<a href="/{{base_url}}/page/{{prev_page}}">previous page</a> |
-		<a href="/{{base_url}}/">first page</a> |
-		{{/is_page_zero}}
-		current page: {{page_no}}/<a href="/{{base_url}}/page/{{total_page_no}}">{{total_page_no}}</a>
-		| <a href="/{{base_url}}/page/{{next_page}}">next page</a>
-	</div>
-</div>
+    <div class="center">
+
+            <table class="center">
+                <tr>
+                    <td>height</td>
+                    <td>age {{age_format}}<!--(Δm)--></td>
+                    <td>size [kB]<!--(Δm)--></td>
+                    <td>no txs</td>
+                    <td>transaction hash</td>
+                    <td>fee [&#181;&#x271]</td>
+                    <td>outputs</td>
+                    <td>in/out</td>
+                    <td>tx size [kB]</td>
+                </tr>
+                {{#txs}}
+                <tr>
+                    <td><a href="/{{base_url}}/block/{{height}}">{{height}}</a></td>
+                    <td>{{age}}<!--{{time_delta}}--></td>
+                    <td>{{blk_size}}</td>
+                    <td>{{no_txs}}</td>
+                    <td><a href="/{{base_url}}/tx/{{hash}}">{{hash}}</a></td>
+                    <td>{{fee_micro}}</td>
+                    <td>{{sum_outputs_short}}</td>
+                    <td>{{no_inputs}}/{{no_outputs}}</td>
+                    <td>{{tx_size_short}}</td>
+                </tr>
+                {{/txs}}
+            </table>
+
+            <div id="pages" class="center" style="text-align: center;">
+             {{^is_page_zero}}
+               <a href="/{{base_url}}/page/{{prev_page}}">previous page</a> |
+               <a href="/{{base_url}}/">first page</a> |
+             {{/is_page_zero}}
+                current page: {{page_no}}/<a href="/{{base_url}}/page/{{total_page_no}}">{{total_page_no}}</a>
+                | <a href="/{{base_url}}/page/{{next_page}}">next page</a>
+            </div>
+
+    </div>
+

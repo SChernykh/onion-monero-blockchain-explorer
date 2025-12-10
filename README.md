@@ -16,7 +16,7 @@ In this example, these limitations are addressed by development of
 an Onion Monero Blockchain Explorer. The example not only shows how to use
 Monero C++ libraries, but also demonstrates how to use:
 
- - [crow](https://github.com/ipkn/crow) - C++ micro web framework
+ - [crow](https://github.com/CrowCpp/Crow) - C++ micro web framework
  - [mstch](https://github.com/no1msd/mstch) - C++ {{mustache}} templates
  - [json](https://github.com/nlohmann/json) - JSON for Modern C++
  - [fmt](https://github.com/fmtlib/fmt) - Small, safe and fast string formatting library
@@ -81,7 +81,7 @@ Current development branch:
 
 Note: `devel` branch of the explorer follows `master` branch of the monero!
 
-## Compilation on Ubuntu 18.04/20.04
+## Compilation on Ubuntu 24.04
 
 
 #### Monero download and compilation
@@ -144,7 +144,7 @@ Go to your browser: http://127.0.0.1:8081
 ## Compiling and running with Docker
 
 The explorer can also be compiled using `docker build` as described below. By default it compiles
-against latest release (`release-v0.17`) branch of monero:
+against latest release tag (i.e. `v0.18.4.0`) of monero:
 
 ```
 # build using all CPU cores
@@ -186,7 +186,7 @@ The explorer can also be built and run using Docker Compose, i.e.:
 version: '3'
 services:
   monerod:
-    image: sethsimmons/simple-monerod:latest
+    image: ghcr.io/sethforprivacy/simple-monerod:latest
     restart: unless-stopped
     container_name: monerod
     volumes:
@@ -194,13 +194,14 @@ services:
     ports:
       - 18080:18080
       - 18089:18089
+    depends_on:
+        - explore
     command:
       - "--rpc-restricted-bind-ip=0.0.0.0"
       - "--rpc-restricted-bind-port=18089"
       - "--public-node"
       - "--no-igd"
       - "--enable-dns-blocklist"
-      - "--prune-blockchain"
 
   explore:
     image: xmrblocks:latest
@@ -213,14 +214,15 @@ services:
       - 8081:8081
     command: ["./xmrblocks --daemon-url=monerod:18089 --enable-json-api --enable-autorefresh-option --enable-emission-monitor --enable-pusher"]
 
-  volumes:
-    xmrdata:
+volumes:
+  xmrdata:
 ```
 
 To build this image, run the following:
 
 ```bash
 git clone https://github.com/moneroexamples/onion-monero-blockchain-explorer.git
+cd onion-monero-blockchain-explorer
 docker-compose build
 ```
 
@@ -228,6 +230,7 @@ Or build and run in one step via:
 
 ```bash
 git clone https://github.com/moneroexamples/onion-monero-blockchain-explorer.git
+cd onion-monero-blockchain-explorer
 docker-compose up -d
 ```
 
