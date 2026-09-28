@@ -10,6 +10,7 @@
 #include "mstch/mstch.hpp"
 
 #include "monero_headers.h"
+#include "crypto/hash-ops.h"
 #include "randomx.h"
 #include "common.hpp"
 #include "blake2/blake2.h"
@@ -247,7 +248,7 @@ me_get_block_longhash(const Blockchain *pbc,
 
     if (pbc != NULL)
     {
-      seed_height = rx_seedheight(height);
+      seed_height = crypto::rx_seedheight(height);
       hash = pbc->get_pending_block_id_by_height(seed_height);
       main_height = pbc->get_current_blockchain_height();
     } else
@@ -257,7 +258,7 @@ me_get_block_longhash(const Blockchain *pbc,
       main_height = 0;
     }
 
-    rx_slow_hash(hash.data, bd.data(), bd.size(), res.data);
+    crypto::rx_slow_hash(hash.data, bd.data(), bd.size(), res.data);
   }
   return true;
 }
@@ -6475,7 +6476,9 @@ json_outputsblocks(string startblock,
     // matches to what was used to produce response.
     j_data["address"]  = pod_to_hex(address_info.address);
     j_data["viewkey"]  = string{};
-    j_data["limit"]    = _limit;
+    j_data["startblock"] = start_block;
+    j_data["endblock"]   = end_block;
+    j_data["limit"]    = std::to_string(end_block - start_block + 1);
     j_data["height"]   = height;
     j_data["mempool"]  = in_mempool_aswell;
 

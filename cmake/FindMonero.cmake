@@ -53,7 +53,7 @@ foreach (l ${LIBS})
 
 	message(STATUS FindMonero " Xmr_${L}_LIBRARIES ${Xmr_${L}_LIBRARY}")
 
-	if(NOT "${Xmr_${L}_LIBRARIES}" STREQUAL "${Xmr_${L}_LIBRARY-NOTFOUND}")
+	if(Xmr_${L}_LIBRARY)
 	  add_library(${l} STATIC IMPORTED)
 	  set_property(TARGET ${l} PROPERTY IMPORTED_LOCATION ${Xmr_${L}_LIBRARIES})
 	endif()

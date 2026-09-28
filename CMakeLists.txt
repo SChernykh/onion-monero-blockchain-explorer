@@ -147,25 +147,15 @@ configure_files(${CMAKE_CURRENT_SOURCE_DIR}/src/templates/css ${CMAKE_CURRENT_BI
 configure_files(${CMAKE_CURRENT_SOURCE_DIR}/src/templates/partials ${CMAKE_CURRENT_BINARY_DIR}/templates/partials)
 configure_files(${CMAKE_CURRENT_SOURCE_DIR}/src/templates/js ${CMAKE_CURRENT_BINARY_DIR}/templates/js)
 
-# Monero no longer always vendors miniupnpc in its build tree, so
-# FindMonero.cmake may create a `miniupnpc` imported target pointing at
-# Xmr_MINIUPNPC_LIBRARY-NOTFOUND. Repair it to use the system library.
-find_library(SYSTEM_MINIUPNPC_LIB miniupnpc)
-if(TARGET miniupnpc)
-    get_target_property(_miniupnpc_loc miniupnpc IMPORTED_LOCATION)
-    if(NOT _miniupnpc_loc OR _miniupnpc_loc MATCHES "NOTFOUND$")
-        if(SYSTEM_MINIUPNPC_LIB)
-            message(STATUS "Repairing miniupnpc target -> ${SYSTEM_MINIUPNPC_LIB}")
-            set_property(TARGET miniupnpc PROPERTY IMPORTED_LOCATION ${SYSTEM_MINIUPNPC_LIB})
-        else()
-            message(STATUS "miniupnpc not found anywhere")
-        endif()
+# Older Monero builds use miniupnpc, either bundled or from the system.
+# Current Monero no longer requires it.
+if(NOT TARGET miniupnpc)
+    find_library(SYSTEM_MINIUPNPC_LIB miniupnpc)
+    if(SYSTEM_MINIUPNPC_LIB)
+        message(STATUS "Using system miniupnpc: ${SYSTEM_MINIUPNPC_LIB}")
+        add_library(miniupnpc UNKNOWN IMPORTED)
+        set_property(TARGET miniupnpc PROPERTY IMPORTED_LOCATION ${SYSTEM_MINIUPNPC_LIB})
     endif()
-    unset(_miniupnpc_loc)
-elseif(SYSTEM_MINIUPNPC_LIB)
-    message(STATUS "Using system miniupnpc: ${SYSTEM_MINIUPNPC_LIB}")
-    add_library(miniupnpc UNKNOWN IMPORTED)
-    set_property(TARGET miniupnpc PROPERTY IMPORTED_LOCATION ${SYSTEM_MINIUPNPC_LIB})
 endif()
 
 set(LIBRARIES
@@ -197,7 +187,6 @@ set(LIBRARIES
         easylogging
         checkpoints
         cncrypto
-        miniupnpc
         version
         epee
         hardforks
@@ -208,6 +197,10 @@ set(LIBRARIES
         unbound
         crypto
         ssl)
+
+if(TARGET miniupnpc)
+    list(APPEND LIBRARIES miniupnpc)
+endif()
 
 if(APPLE)
     set(LIBRARIES ${LIBRARIES} "-framework IOKit -framework Foundation")
