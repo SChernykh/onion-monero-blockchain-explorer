@@ -28,7 +28,7 @@ parse_str_secret_key(const string& key_str, T& secret_key)
 
     if(!parse_hash256(key_str, hash_))
     {
-        cerr << "Cant parse a key (e.g. viewkey): " << key_str << endl;
+        cerr << "Cant parse a key (e.g. viewkey)" << endl;
         return false;
     }
 
@@ -954,12 +954,6 @@ decode_ringct(rct::rctSig const& rv,
             case rct::RCTTypeBulletproof2:
             case rct::RCTTypeCLSAG:
             case rct::RCTTypeBulletproofPlus:
-                amount = rct::decodeRctSimple(rv,
-                                              rct::sk2rct(scalar1),
-                                              i,
-                                              mask,
-                                              hw::get_device("default"));
-                break;
             case rct::RCTTypeFull:
                 amount = rct::decodeRct(rv,
                                     rct::sk2rct(scalar1),

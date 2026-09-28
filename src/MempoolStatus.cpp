@@ -115,8 +115,7 @@ MempoolStatus::read_mempool()
     // get txpool from lmdb database instead of rpc call
     if (!mcore->get_mempool().get_transactions_and_spent_keys_info(
                 mempool_tx_info,
-                pool_key_image_info,
-                true))
+                pool_key_image_info))
     {
         cerr << "Getting mempool failed " << endl;
         return false;
@@ -260,7 +259,9 @@ MempoolStatus::read_network_info()
     local_copy.difficulty                 = rpc_network_info.difficulty;
     local_copy.difficulty_top64           = rpc_network_info.difficulty_top64;
     local_copy.target                     = rpc_network_info.target;
-    cryptonote::difficulty_type hash_rate = cryptonote::difficulty_type(rpc_network_info.wide_difficulty) / rpc_network_info.target;
+    cryptonote::difficulty_type hash_rate = rpc_network_info.target
+        ? cryptonote::difficulty_type(rpc_network_info.wide_difficulty) / rpc_network_info.target
+        : cryptonote::difficulty_type(0);
     local_copy.hash_rate                  = (hash_rate & 0xFFFFFFFFFFFFFFFF).convert_to<uint64_t>();
     local_copy.hash_rate_top64            = ((hash_rate >> 64) & 0xFFFFFFFFFFFFFFFF).convert_to<uint64_t>();
     local_copy.tx_count                   = rpc_network_info.tx_count;
@@ -279,16 +280,17 @@ MempoolStatus::read_network_info()
     local_copy.start_time                 = rpc_network_info.start_time;
 
 
-    strncpy(local_copy.block_size_limit_str, fmt::format("{:0.2f}",
-                                             static_cast<double>(
-                                             local_copy.block_size_limit ) / 2.0 / 1024.0).c_str(),
-                                             sizeof(local_copy.block_size_limit_str));
+    // snprintf always NUL-terminates; strncpy(dst, src, sizeof dst) does not,
+    // and these values are daemon-supplied so their formatted length is not
+    // under our control.
+    snprintf(local_copy.block_size_limit_str,
+             sizeof(local_copy.block_size_limit_str), "%0.2f",
+             static_cast<double>(local_copy.block_size_limit) / 2.0 / 1024.0);
 
 
-    strncpy(local_copy.block_size_median_str, fmt::format("{:0.2f}",
-                                              static_cast<double>(
-                                              local_copy.block_size_median) / 1024.0).c_str(),
-                                              sizeof(local_copy.block_size_median_str));
+    snprintf(local_copy.block_size_median_str,
+             sizeof(local_copy.block_size_median_str), "%0.2f",
+             static_cast<double>(local_copy.block_size_median) / 1024.0);
 
     epee::string_tools::hex_to_pod(rpc_network_info.top_block_hash,
                                    local_copy.top_block_hash);
