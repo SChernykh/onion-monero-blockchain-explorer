@@ -36,6 +36,22 @@ struct jsonresponse: public crow::response
         add_header("Content-Type", "application/json");
     }
 };
+
+// sets the base URL for the links in the page rendered for each request
+struct base_url_setter
+{
+    struct context {};
+
+    void before_handle(crow::request& req, crow::response& /*res*/,
+                       context& /*ctx*/)
+    {
+        xmreg::current_base_url = xmreg::get_base_url(req.url);
+    }
+
+    void after_handle(crow::request& /*req*/, crow::response& /*res*/,
+                      context& /*ctx*/)
+    {}
+};
 }
 
 int
@@ -336,7 +352,7 @@ main(int ac, const char* av[])
                           daemon_rpc_login);
 
     // crow instance
-    crow::SimpleApp app;
+    crow::App<myxmr::base_url_setter> app;
 
     app.loglevel(crow::LogLevel::Warning);
 

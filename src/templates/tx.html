@@ -4,10 +4,10 @@
      {{#enable_autorefresh_option}}
          |
         {{#refresh}}
-            <a href="/{{base_url}}/tx/{{tx_hash}}">Autorefresh is ON (10 s)</a>
+            <a href="{{base_url}}/tx/{{tx_hash}}">Autorefresh is ON (10 s)</a>
         {{/refresh}}
         {{^refresh}}
-            <a href="/{{base_url}}/tx/{{tx_hash}}/autorefresh">Autorefresh is OFF</a>
+            <a href="{{base_url}}/tx/{{tx_hash}}/autorefresh">Autorefresh is OFF</a>
         {{/refresh}}
      {{/enable_autorefresh_option}}
      </h3>

@@ -156,6 +156,33 @@ using epee::string_tools::pod_to_hex;
 using epee::string_tools::hex_to_pod;
 
 /**
+* @brief Path from the page being rendered back to the explorer's root
+*
+* All links in the pages are relative to it, so they work under any base
+* URL, e.g., behind a reverse proxy that serves the explorer at /explorer/.
+* The web server sets it for each request, using get_base_url.
+*/
+inline thread_local string current_base_url {"."};
+
+// "/" -> ".", "/tx/<hash>" -> "..", "/tx/<hash>/1" -> "../.."
+inline string
+get_base_url(string const& request_path)
+{
+    auto const depth = std::count(request_path.begin(),
+                                  request_path.end(), '/');
+
+    if (depth < 2)
+        return ".";
+
+    string base_url {".."};
+
+    for (auto i = decltype(depth) {2}; i < depth; ++i)
+        base_url += "/..";
+
+    return base_url;
+}
+
+/**
 * @brief Info about the FCMP++ membership proof of a tx
 */
 struct fcmp_pp_tx_info
@@ -1984,9 +2011,6 @@ show_my_outputs(string tx_hash_str,
     string pid_str   = pod_to_hex(txd.payment_id);
     string pid8_str  = pod_to_hex(txd.payment_id8);
 
-    string shortcut_url = (tx_prove ? string("/explorer/prove") : string("/explorer/myoutputs"));
-
-
     string viewkey_str_partial = mask_secret(viewkey_str);
 
     // initalise page tempate map with basic info about blockchain
@@ -2010,8 +2034,7 @@ show_my_outputs(string tx_hash_str,
             {"payment_id"           , pid_str},
             {"payment_id8"          , pid8_str},
             {"decrypted_payment_id8", string{}},
-            {"tx_prove"             , tx_prove},
-            {"shortcut_url"         , shortcut_url}
+            {"tx_prove"             , tx_prove}
     };
 
     string server_time_str = xmreg::timestamp_to_str_gm(server_timestamp, "%F");
@@ -8494,7 +8517,7 @@ get_footer()
 void
 add_css_style(mstch::map& context)
 {
-    context["base_url"] = std::string("explorer");
+    context["base_url"] = current_base_url;
 
     // add_css_style goes to every subpage so here we mark
 
