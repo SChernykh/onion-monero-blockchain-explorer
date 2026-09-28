@@ -2,23 +2,23 @@
 <div class="center">
      <h3 style="font-size: 12px; margin-top: 20px">
 
-        Server time: {{server_timestamp}}  | <a href="{{base_url}}/txpool">Transaction pool</a>
+        Server time: {{server_timestamp}}  | <a href="{{{base_url}}}/txpool">Transaction pool</a>
          {{#enable_pusher}}
-            | <a href="{{base_url}}/rawtx">Transaction pusher </a>
+            | <a href="{{{base_url}}}/rawtx">Transaction pusher </a>
          {{/enable_pusher}}
          {{#enable_key_image_checker}}
-            | <a href="{{base_url}}/rawkeyimgs">Key images checker</a>
+            | <a href="{{{base_url}}}/rawkeyimgs">Key images checker</a>
          {{/enable_key_image_checker}}
          {{#enable_output_key_checker}}
-            | <a href="{{base_url}}/rawoutputkeys">Output keys checker</a>
+            | <a href="{{{base_url}}}/rawoutputkeys">Output keys checker</a>
          {{/enable_output_key_checker}}
          {{#enable_autorefresh_option}}
              |
             {{#refresh}}
-                <a href="{{base_url}}/">Autorefresh is ON (10 s)</a>
+                <a href="{{{base_url}}}/">Autorefresh is ON (10 s)</a>
             {{/refresh}}
             {{^refresh}}
-               <a href="{{base_url}}/autorefresh">Autorefresh is OFF</a>
+               <a href="{{{base_url}}}/autorefresh">Autorefresh is OFF</a>
             {{/refresh}}
          {{/enable_autorefresh_option}}
          {{#testnet_url}}
@@ -89,11 +89,11 @@
                 </tr>
                 {{#txs}}
                 <tr>
-                    <td><a href="{{base_url}}/block/{{height}}">{{height}}</a></td>
+                    <td><a href="{{{base_url}}}/block/{{height}}">{{height}}</a></td>
                     <td>{{age}}<!--{{time_delta}}--></td>
                     <td>{{blk_size}}</td>
                     <td>{{no_txs}}</td>
-                    <td><a href="{{base_url}}/tx/{{hash}}">{{hash}}</a></td>
+                    <td><a href="{{{base_url}}}/tx/{{hash}}">{{hash}}</a></td>
                     <td>{{fee_micro}}</td>
                     <td>{{sum_outputs_short}}</td>
                     <td>{{no_inputs}}/{{no_outputs}}</td>
@@ -104,11 +104,11 @@
 
             <div id="pages" class="center" style="text-align: center;">
              {{^is_page_zero}}
-               <a href="{{base_url}}/page/{{prev_page}}">previous page</a> |
-               <a href="{{base_url}}/">first page</a> |
+               <a href="{{{base_url}}}/page/{{prev_page}}">previous page</a> |
+               <a href="{{{base_url}}}/">first page</a> |
              {{/is_page_zero}}
-                current page: {{page_no}}/<a href="{{base_url}}/page/{{total_page_no}}">{{total_page_no}}</a>
-                | <a href="{{base_url}}/page/{{next_page}}">next page</a>
+                current page: {{page_no}}/<a href="{{{base_url}}}/page/{{total_page_no}}">{{total_page_no}}</a>
+                | <a href="{{{base_url}}}/page/{{next_page}}">next page</a>
             </div>
 
     </div>
