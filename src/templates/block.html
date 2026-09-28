@@ -32,7 +32,18 @@
         </tr>
         <tr>
             <td>Difficulty:</td><td>{{blk_difficulty}}</td>
+            {{#is_fcmp_pp_block}}
+                <td>FCMP++ tree layers:</td><td>{{fcmp_pp_n_tree_layers}}</td>
+                {{#fcmp_pp_have_n_leaf_tuples}}
+                    <td>Outputs in the tree:</td><td>{{fcmp_pp_n_leaf_tuples}}</td>
+                {{/fcmp_pp_have_n_leaf_tuples}}
+            {{/is_fcmp_pp_block}}
         </tr>
+        {{#is_fcmp_pp_block}}
+        <tr>
+            <td>FCMP++ tree root:</td><td colspan="5">{{fcmp_pp_tree_root}}</td>
+        </tr>
+        {{/is_fcmp_pp_block}}
     </table>
 
     <h3>Miner reward transaction</h3>

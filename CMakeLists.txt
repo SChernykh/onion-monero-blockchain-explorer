@@ -158,12 +158,22 @@ if(NOT TARGET miniupnpc)
     endif()
 endif()
 
+# polyseed and utf8proc are not built by every Monero version
+set(POLYSEED_LIBRARIES "")
+foreach(l polyseed_wrapper polyseed utf8proc)
+    if(TARGET ${l})
+        list(APPEND POLYSEED_LIBRARIES ${l})
+    endif()
+endforeach()
+
 set(LIBRARIES
         myxrm
         myext
         mstch
         wallet
         cryptonote_core
+        carrot_impl
+        carrot_core
         cryptonote_basic
         cryptonote_protocol
         cryptonote_format_utils_basic
@@ -180,13 +190,12 @@ set(LIBRARIES
         fcmp_pp_rust
         common
         mnemonics
-        polyseed_wrapper
-        polyseed
-        utf8proc
+        ${POLYSEED_LIBRARIES}
         serialization
         easylogging
         checkpoints
         cncrypto
+        mx25519
         version
         epee
         hardforks

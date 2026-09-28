@@ -10,14 +10,6 @@
 #include "mstch/mstch.hpp"
 
 #include "monero_headers.h"
-#include "crypto/hash-ops.h"
-#include "randomx.h"
-#include "common.hpp"
-#include "blake2/blake2.h"
-#include "virtual_machine.hpp"
-#include "program.hpp"
-#include "aes_hash.hpp"
-#include "assembly_generator_x86.hpp"
 
 #include "../gen/version.h"
 
@@ -163,106 +155,25 @@ using namespace std;
 using epee::string_tools::pod_to_hex;
 using epee::string_tools::hex_to_pod;
 
-template< typename T >
-std::string as_hex(T i)
+/**
+* @brief Info about the FCMP++ membership proof of a tx
+*/
+struct fcmp_pp_tx_info
 {
-  std::stringstream ss;
+    // the proof is in the prunable part of the tx, so it is only
+    // available for txs that were not fetched pruned
+    bool available {false};
 
-  ss << "0x" << setfill ('0') << setw(sizeof(T)*2) 
-         << hex << i;
-  return ss.str();
-}
+    uint64_t reference_block {0};
+    uint64_t n_tree_layers {0};
+    uint64_t proof_size {0};
 
-struct randomx_status
-{
-    randomx::Program prog;
-    randomx::RegisterFile reg_file;
-
-    randomx::AssemblyGeneratorX86 
-    get_asm() 
-    {
-        randomx::AssemblyGeneratorX86 asmX86;
-        asmX86.generateProgram(prog);
-    	return asmX86;
-    }
-
-    mstch::map
-    get_mstch() 
-    {
-        auto asmx86 = get_asm();
-
-        stringstream ss1, ss2;
-
-        ss1 << prog;
-        asmx86.printCode(ss2);
-        
-        mstch::map rx_map {
-            {"rx_code" , ss1.str()},
-            {"rx_code_asm", ss2.str()}
-        };
-
-	for (size_t i = 0; i < randomx::RegistersCount; ++i)
-	{
-	    rx_map["r"+std::to_string(i)] = as_hex(reg_file.r[i]);
-	}
-	
-	for (size_t i = 0; i < randomx::RegistersCount/2; ++i)
-	{
-	    rx_map["f"+std::to_string(i)] = rx_float_as_str(reg_file.f[i]);
-	    rx_map["e"+std::to_string(i)] = rx_float_as_str(reg_file.e[i]);
-	    rx_map["a"+std::to_string(i)] = rx_float_as_str(reg_file.a[i]);
-	}
-
-        return rx_map;
-    }
-
-    string
-    rx_float_as_str(randomx::fpu_reg_t fpu)
-    {
-	uint64_t* lo = reinterpret_cast<uint64_t*>(&fpu.lo);	
-	uint64_t* hi = reinterpret_cast<uint64_t*>(&fpu.hi);	
-
-	return 	 "{" + as_hex(*lo) + ", " + as_hex(*hi)+ "}";
-    }
+    // the curve tree as of the reference block, if the db has it: its root,
+    // and the number of outputs in it, i.e., the anonymity set of each input
+    bool have_tree_info {false};
+    string tree_root;
+    uint64_t n_leaf_tuples {0};
 };
-
-bool
-me_get_block_longhash(const Blockchain *pbc,
-                   const block& b,
-                   crypto::hash& res,
-                   const uint64_t height,
-                   const int miners)
-{
-  // block 202612 bug workaround
-  if (height == 202612)
-  {
-    static const std::string longhash_202612 = "84f64766475d51837ac9efbef1926486e58563c95a19fef4aec3254f03000000";
-    epee::string_tools::hex_to_pod(longhash_202612, res);
-    return true;
-  }
-  blobdata bd = get_block_hashing_blob(b);
-  if (b.major_version >= RX_BLOCK_VERSION)
-  {
-    uint64_t seed_height, main_height;
-    crypto::hash hash;
-
-    if (pbc != NULL)
-    {
-      seed_height = crypto::rx_seedheight(height);
-      hash = pbc->get_pending_block_id_by_height(seed_height);
-      main_height = pbc->get_current_blockchain_height();
-    } else
-    {
-      memset(&hash, 0, sizeof(hash));  // only happens when generating genesis block
-      seed_height = 0;
-      main_height = 0;
-    }
-
-    crypto::rx_slow_hash(hash.data, bd.data(), bd.size(), res.data);
-  }
-  return true;
-}
-
 
 /**
 * @brief The tx_details struct
@@ -286,6 +197,12 @@ struct tx_details
     size_t   version;
 
     bool has_additional_tx_pub_keys {false};
+
+    // outputs use the Carrot addressing protocol
+    bool is_carrot {false};
+
+    // inputs are spent with FCMP++ proofs, i.e., have no rings
+    bool is_fcmp_pp {false};
 
     uint64_t unlock_time;
     uint64_t no_confirmations;
@@ -323,7 +240,7 @@ struct tx_details
         {
             double payed_for_kB = xmr_amount / tx_size;
 
-            mixin_str        = std::to_string(mixin_no);
+            mixin_str        = is_fcmp_pp ? string("FCMP++") : std::to_string(mixin_no);
             fee_str          = fmt::format("{:0.6f}", xmr_amount);
             fee_short_str    = fmt::format("{:0.4f}", xmr_amount);
             fee_micro_str    = fmt::format("{:04.0f}" , xmr_amount * 1e6);
@@ -1178,6 +1095,9 @@ show_block(uint64_t _blk_height)
             {"blk_size"             , fmt::format("{:0.4f}",
                                                   static_cast<double>(blk_size) / 1024.0)},
     };
+
+    add_fcmp_pp_block_info(blk, _blk_height, context);
+
     context.emplace("coinbase_txs", mstch::array{{txd_coinbase.get_mstch_map()}});
     context.emplace("blk_txs"     , mstch::array());
 
@@ -2096,12 +2016,75 @@ show_my_outputs(string tx_hash_str,
 
     string server_time_str = xmreg::timestamp_to_str_gm(server_timestamp, "%F");
 
+    // Carrot outputs are found with X25519 shared secrets instead of the key
+    // derivations of pre-Carrot outputs. And since the inputs of Carrot txs
+    // have no rings, there are no ring members to look for our outputs in
+    if (txd.is_carrot)
+    {
+        vector<carrot_output_info> outputs_info;
+        string error_msg;
 
+        bool const scanned = tx_prove
+                ? scan_carrot_tx_as_sender(tx, address_info,
+                                           multiple_tx_secret_keys,
+                                           outputs_info, error_msg)
+                : scan_carrot_tx_as_receiver(tx, address_info, prv_view_key,
+                                             outputs_info, error_msg);
+
+        if (!scanned)
+            return error_msg;
+
+        vector<mx25519_pubkey> const enote_ephemeral_pubkeys
+                = get_carrot_enote_ephemeral_pubkeys(tx);
+
+        context["is_carrot"] = true;
+        context["enote_ephemeral_pubkey"] = enote_ephemeral_pubkeys.size() == 1
+                                            ? pod_to_hex(enote_ephemeral_pubkeys[0])
+                                            : string{};
+        context["per_output_enote_ephemeral_pubkeys"] = enote_ephemeral_pubkeys.size() > 1;
+
+        mstch::array outputs;
+
+        uint64_t sum_xmr {0};
+
+        for (size_t output_idx = 0; output_idx < txd.output_pub_keys.size(); ++output_idx)
+        {
+            carrot_output_info const& output_info = outputs_info.at(output_idx);
+
+            // amounts of coinbase outputs are in plain sight
+            uint64_t const xmr_amount = output_info.mine
+                    ? output_info.amount
+                    : std::get<1>(txd.output_pub_keys[output_idx]);
+
+            if (output_info.mine)
+                sum_xmr += xmr_amount;
+
+            if (output_info.payment_id)
+                context["decrypted_payment_id8"] = pod_to_hex(*output_info.payment_id);
+
+            outputs.push_back(mstch::map {
+                    {"out_pub_key", pod_to_hex(std::get<0>(txd.output_pub_keys[output_idx]))},
+                    {"amount"     , xmreg::xmr_amount_to_str(xmr_amount)},
+                    {"mine_output", output_info.mine},
+                    {"output_idx" , fmt::format("{:02d}", output_idx)}
+            });
+        }
+
+        context.emplace("outputs", outputs);
+
+        context["found_our_outputs"] = (sum_xmr > 0);
+        context["sum_xmr"]           = xmreg::xmr_amount_to_str(sum_xmr);
+
+        add_css_style(context);
+
+        // render the page
+        return mstch::render(template_file["my_outputs"], context);
+    }
 
     // public transaction key is combined with our viewkey
     // to create, so called, derived key.
     key_derivation derivation;
-    std::vector<key_derivation> additional_derivations(txd.additional_pks.size());   
+    std::vector<key_derivation> additional_derivations(txd.additional_pks.size());
 
     if (tx_prove && multiple_tx_secret_keys.size()
             != txd.additional_pks.size() + 1)
@@ -2735,12 +2718,14 @@ show_rawtx()
 }
 
 string
-show_checkrawtx(string raw_tx_data, string action)
+show_checkrawtx(string raw_tx_data, string action, string viewkey_str = string{})
 {
     //get current server timestamp
     server_timestamp = std::time(nullptr);
 
     clean_post_data(raw_tx_data);
+
+    boost::trim(viewkey_str);
 
     string decoded_raw_tx_data = epee::string_encoding::base64_decode(raw_tx_data);
 
@@ -2748,7 +2733,8 @@ show_checkrawtx(string raw_tx_data, string action)
 
     const size_t magiclen = strlen(UNSIGNED_TX_PREFIX);
 
-    string data_prefix = xmreg::make_printable(decoded_raw_tx_data.substr(0, magiclen));
+    // the magic is followed by a version byte
+    string data_prefix = xmreg::make_printable(decoded_raw_tx_data.substr(0, magiclen + 1));
 
     bool unsigned_tx_given {false};
 
@@ -2777,35 +2763,36 @@ show_checkrawtx(string raw_tx_data, string action)
 
     if (unsigned_tx_given)
     {
+        ::tools::wallet::cold::UnsignedTransactionSetVariant unsigned_txs;
 
-        bool r {false};
+        string error_msg;
 
-        string s = decoded_raw_tx_data.substr(magiclen);
-
-        ::tools::wallet2::unsigned_tx_set exported_txs;
-
-        try
+        if (!decrypt_tx_set(decoded_raw_tx_data, viewkey_str,
+                            ::tools::wallet::cold::decrypt_unsigned_tx_set,
+                            unsigned_txs, error_msg))
         {
-            // monero master uses binary_archive (v005, encrypted with view key).
-            // without the view key we can only try raw deserialize; encrypted
-            // blobs will fail here and report an error below.
-            binary_archive<false> ar{epee::strspan<std::uint8_t>(s)};
-            if (::serialization::serialize(ar, exported_txs)
-                && ::serialization::check_stream_state(ar))
-                r = true;
-            else
-                cerr << "Failed to parse unsigned tx data " << endl;
-        }
-        catch (...)
-        {
-            cerr << "Failed to parse unsigned tx data " << endl;
+            context["has_error"] = true;
+            context["error_msg"] = error_msg;
+
+            return mstch::render(full_page, context);
         }
 
-        if (r)
+        if (auto const* carrot_txs = std::get_if<
+                ::tools::wallet::cold::UnsignedCarrotTransactionSetV1>(&unsigned_txs))
+        {
+            context["carrot_txs"] = get_carrot_tx_proposals_mstch(carrot_txs->tx_proposals);
+
+            return mstch::render(full_page, context);
+        }
+
+        auto const* exported_txs = std::get_if<
+                ::tools::wallet::cold::UnsignedPreCarrotTransactionSet>(&unsigned_txs);
+
+        if (exported_txs)
         {
             mstch::array& txs = boost::get<mstch::array>(context["txs"]);
 
-            for (const ::tools::wallet2::tx_construction_data& tx_cd: exported_txs.txes)
+            for (const ::tools::wallet::PreCarrotTransactionProposal& tx_cd: exported_txs->txes)
             {
                 size_t no_of_sources = tx_cd.sources.size();
 
@@ -3057,13 +3044,12 @@ show_checkrawtx(string raw_tx_data, string action)
 
                 txs.push_back(tx_cd_data);
 
-            } // for (const ::tools::wallet2::tx_construction_data& tx_cd: exported_txs.txes)
+            } // for (const ::tools::wallet::PreCarrotTransactionProposal& tx_cd: exported_txs->txes)
         }
         else
         {
-            cerr << "deserialization of unsigned tx data NOT successful" << endl;
-            return string("deserialization of unsigned tx data NOT successful. "
-                                  "Maybe its not base64 encoded?");
+            cerr << "unknown type of unsigned tx set" << endl;
+            return string("Unknown type of unsigned tx set");
         }
     } // if (unsigned_tx_given)
     else
@@ -3072,7 +3058,8 @@ show_checkrawtx(string raw_tx_data, string action)
 
         const size_t magiclen = strlen(SIGNED_TX_PREFIX);
 
-        string data_prefix = xmreg::make_printable(decoded_raw_tx_data.substr(0, magiclen));
+        // the magic is followed by a version byte
+        string data_prefix = xmreg::make_printable(decoded_raw_tx_data.substr(0, magiclen + 1));
 
         if (strncmp(decoded_raw_tx_data.c_str(), SIGNED_TX_PREFIX, magiclen) != 0)
         {
@@ -3164,32 +3151,40 @@ show_checkrawtx(string raw_tx_data, string action)
 
         context["data_prefix"] = data_prefix;
 
-        bool r {false};
+        ::tools::wallet::cold::SignedTransactionSetVariant signed_tx_set;
 
-        string s = decoded_raw_tx_data.substr(magiclen);
+        string error_msg;
 
-        ::tools::wallet2::signed_tx_set signed_txs;
-
-        try
+        if (!decrypt_tx_set(decoded_raw_tx_data, viewkey_str,
+                            ::tools::wallet::cold::decrypt_signed_tx_set,
+                            signed_tx_set, error_msg))
         {
-            binary_archive<false> ar{epee::strspan<std::uint8_t>(s)};
-            if (::serialization::serialize(ar, signed_txs)
-                && ::serialization::check_stream_state(ar))
-                r = true;
-            else
-                cerr << "Failed to parse signed tx data " << endl;
-        }
-        catch (...)
-        {
-            cerr << "Failed to parse signed tx data " << endl;
+            context["has_error"] = true;
+            context["error_msg"] = error_msg;
+
+            return mstch::render(full_page, context);
         }
 
-        if (!r)
+        // signed Carrot tx sets only have the spend authorization signatures
+        // of the inputs, so there are no txs in them yet
+        if (auto const* carrot_txs = std::get_if<
+                ::tools::wallet::cold::SignedCarrotTransactionSetV1>(&signed_tx_set))
         {
-            cerr << "deserialization of signed tx data NOT successful" << endl;
-            return string("deserialization of signed tx data NOT successful. "
-                                  "Maybe its not base64 encoded?");
+            std::unordered_map<crypto::public_key, crypto::key_image> key_images;
+
+            for (auto const& signed_input: carrot_txs->signed_inputs)
+                key_images[signed_input.second.first] = signed_input.first;
+
+            context["carrot_txs"] = get_carrot_tx_proposals_mstch(
+                    carrot_txs->tx_proposals, key_images);
+
+            context["signed_carrot_txs"] = true;
+
+            return mstch::render(full_page, context);
         }
+
+        auto const& signed_txs = std::get<
+                ::tools::wallet::cold::SignedFullTransactionSet>(signed_tx_set);
 
         std::vector<tools::wallet2::pending_tx> ptxs = signed_txs.ptx;
 
@@ -3206,12 +3201,69 @@ show_checkrawtx(string raw_tx_data, string action)
 
             tx_context["tx_prv_key"] = string{};
 
+            // txs made from Carrot tx proposals have no ring members to mark
+            if (auto const* carrot_proposal = std::get_if<
+                    carrot::CarrotTransactionProposalV1>(&ptx.construction_data))
+            {
+                mstch::array destination_addresses;
+                uint64_t outputs_xmr_sum {0};
+
+                for (auto const& payment: carrot_proposal->normal_payment_proposals)
+                {
+                    destination_addresses.push_back(mstch::map {
+                            {"dest_address"  , carrot_destination_to_str(payment.destination)},
+                            {"dest_amount"   , xmreg::xmr_amount_to_str(payment.amount)},
+                            {"is_this_change", false}
+                    });
+
+                    outputs_xmr_sum += payment.amount;
+                }
+
+                for (auto const& selfsend: carrot_proposal->selfsend_payment_proposals)
+                {
+                    destination_addresses.push_back(mstch::map {
+                            {"dest_address"  , fmt::format("own subaddress {:d}/{:d}",
+                                                           selfsend.subaddr_index.index.major,
+                                                           selfsend.subaddr_index.index.minor)},
+                            {"dest_amount"   , xmreg::xmr_amount_to_str(selfsend.amount)},
+                            {"is_this_change", selfsend.enote_type == carrot::CarrotEnoteType::CHANGE}
+                    });
+
+                    outputs_xmr_sum += selfsend.amount;
+                }
+
+                tx_context["outputs_xmr_sum"] = xmreg::xmr_amount_to_str(outputs_xmr_sum);
+                tx_context["have_raw_tx"]     = true;
+
+                tx_context.insert({"dest_infos", destination_addresses});
+
+                for (mstch::node& input_node: boost::get<mstch::array>(tx_context["inputs"]))
+                {
+                    mstch::map& input_map = boost::get<mstch::map>(input_node);
+
+                    key_image key_img;
+
+                    if (epee::string_tools::hex_to_pod(
+                            boost::get<string>(input_map["in_key_img"]), key_img))
+                    {
+                        input_map["already_spent"] = core_storage->get_db().has_key_image(key_img);
+                    }
+                }
+
+                boost::get<mstch::array>(context["txs"]).push_back(tx_context);
+
+                continue;
+            }
+
+            ::tools::wallet::PreCarrotTransactionProposal const& construction_data
+                    = std::get<::tools::wallet::PreCarrotTransactionProposal>(ptx.construction_data);
+
             mstch::array destination_addresses;
             vector<uint64_t> real_ammounts;
             uint64_t outputs_xmr_sum {0};
 
             // destiantion address for this tx
-            for (tx_destination_entry& a_dest: ptx.construction_data.splitted_dsts)
+            for (tx_destination_entry const& a_dest: construction_data.splitted_dsts)
             {
                 //stealth_address_amount.insert({dest.addr, dest.amount});
                 //cout << get_account_address_as_str(testnet, a_dest.addr) << endl;
@@ -3232,19 +3284,19 @@ show_checkrawtx(string raw_tx_data, string action)
             }
 
             // get change address and amount info
-            if (ptx.construction_data.change_dts.amount > 0)
+            if (construction_data.change_dts.amount > 0)
             {
                 destination_addresses.push_back(
                         mstch::map {
                                 {"dest_address"   , get_account_address_as_str(
-                                        nettype, ptx.construction_data.change_dts.is_subaddress, ptx.construction_data.change_dts.addr)},
+                                        nettype, construction_data.change_dts.is_subaddress, construction_data.change_dts.addr)},
                                 {"dest_amount"    ,
-                                        xmreg::xmr_amount_to_str(ptx.construction_data.change_dts.amount)},
+                                        xmreg::xmr_amount_to_str(construction_data.change_dts.amount)},
                                 {"is_this_change" , true}
                         }
                 );
 
-                real_ammounts.push_back(ptx.construction_data.change_dts.amount);
+                real_ammounts.push_back(construction_data.change_dts.amount);
             };
 
             tx_context["outputs_xmr_sum"] = xmreg::xmr_amount_to_str(outputs_xmr_sum);
@@ -3283,7 +3335,7 @@ show_checkrawtx(string raw_tx_data, string action)
 
             uint64_t inputs_xmr_sum {0};
 
-            for (const tx_source_entry&  tx_source: ptx.construction_data.sources)
+            for (const tx_source_entry&  tx_source: construction_data.sources)
             {
                 transaction real_source_tx;
 
@@ -3441,12 +3493,14 @@ show_checkrawtx(string raw_tx_data, string action)
 }
 
 string
-show_pushrawtx(string raw_tx_data, string action)
+show_pushrawtx(string raw_tx_data, string action, string viewkey_str = string{})
 {
     //get current server timestamp
     server_timestamp = std::time(nullptr);
 
     clean_post_data(raw_tx_data);
+
+    boost::trim(viewkey_str);
 
     // initalize page template context map
     mstch::map context {
@@ -3480,7 +3534,8 @@ show_pushrawtx(string raw_tx_data, string action)
 
         const size_t magiclen = strlen(SIGNED_TX_PREFIX);
 
-        string data_prefix = xmreg::make_printable(decoded_raw_tx_data.substr(0, magiclen));
+        // the magic is followed by a version byte
+        string data_prefix = xmreg::make_printable(decoded_raw_tx_data.substr(0, magiclen + 1));
 
         context["data_prefix"] = data_prefix;
 
@@ -3507,39 +3562,36 @@ show_pushrawtx(string raw_tx_data, string action)
             return mstch::render(full_page, context);
         }
 
-        bool r {false};
+        ::tools::wallet::cold::SignedTransactionSetVariant signed_tx_set;
 
-        string s = decoded_raw_tx_data.substr(magiclen);
+        string error_msg;
 
-        ::tools::wallet2::signed_tx_set signed_txs;
-
-        try
+        if (!decrypt_tx_set(decoded_raw_tx_data, viewkey_str,
+                            ::tools::wallet::cold::decrypt_signed_tx_set,
+                            signed_tx_set, error_msg))
         {
-            binary_archive<false> ar{epee::strspan<std::uint8_t>(s)};
-            if (::serialization::serialize(ar, signed_txs)
-                && ::serialization::check_stream_state(ar))
-                r = true;
-            else
-                cerr << "Failed to parse signed tx data " << endl;
-        }
-        catch (...)
-        {
-            cerr << "Failed to parse signed tx data " << endl;
-        }
-
-
-        if (!r)
-        {
-            string error_msg = fmt::format("Deserialization of signed tx data NOT successful! "
-                                                   "Maybe its not base64 encoded?");
-
             context["has_error"] = true;
             context["error_msg"] = error_msg;
 
             return mstch::render(full_page, context);
         }
 
-        ptx_vector = signed_txs.ptx;
+        auto const* signed_txs = std::get_if<
+                ::tools::wallet::cold::SignedFullTransactionSet>(&signed_tx_set);
+
+        if (!signed_txs)
+        {
+            context["has_error"] = true;
+            context["error_msg"] = string(
+                    "Signed Carrot transaction sets only have the spend "
+                    "authorization signatures of the inputs. The wallet that "
+                    "made the unsigned set has to add the FCMP++ membership "
+                    "proofs before the transactions can be pushed.");
+
+            return mstch::render(full_page, context);
+        }
+
+        ptx_vector = signed_txs->ptx;
     }
 
     context.emplace("txs", mstch::array{});
@@ -3728,11 +3780,13 @@ show_checkrawkeyimgs(string raw_data, string viewkey_str)
 
     const size_t magiclen = strlen(KEY_IMAGE_EXPORT_FILE_MAGIC);
 
-    string data_prefix = xmreg::make_printable(decoded_raw_data.substr(0, magiclen));
+    // the magic is followed by a version byte
+    string data_prefix = xmreg::make_printable(decoded_raw_data.substr(0, magiclen + 1));
 
     context["data_prefix"] = data_prefix;
 
-    if (strncmp(decoded_raw_data.c_str(), KEY_IMAGE_EXPORT_FILE_MAGIC, magiclen) != 0)
+    if (decoded_raw_data.size() <= magiclen
+            || strncmp(decoded_raw_data.c_str(), KEY_IMAGE_EXPORT_FILE_MAGIC, magiclen) != 0)
     {
         string error_msg = fmt::format("This does not seem to be key image export data.");
 
@@ -3742,15 +3796,142 @@ show_checkrawkeyimgs(string raw_data, string viewkey_str)
         return mstch::render(full_page, context);
     }
 
-    // decrypt key images data using private view key
-    decoded_raw_data = xmreg::decrypt(
-            std::string(decoded_raw_data, magiclen),
-            prv_view_key, true);
+    uint8_t const version = decoded_raw_data[magiclen];
 
-    if (decoded_raw_data.empty())
+    // address of the wallet and its key images, with their signatures
+    account_public_address xmr_address;
+    vector<pair<crypto::key_image, string>> key_images;
+
+    if (version == 2)
     {
-        string error_msg = fmt::format("Failed to authenticate key images data. "
-                                               "Maybe wrong viewkey was porvided?");
+        // decrypt key images data using private view key
+        decoded_raw_data = xmreg::decrypt(
+                std::string(decoded_raw_data, magiclen + 1),
+                prv_view_key, true);
+
+        if (decoded_raw_data.empty())
+        {
+            string error_msg = fmt::format("Failed to authenticate key images data. "
+                                                   "Maybe wrong viewkey was porvided?");
+
+            context["has_error"] = true;
+            context["error_msg"] = error_msg;
+
+            return mstch::render(full_page, context);
+        }
+
+        // header is public spend and keys
+        const size_t header_lenght = 2 * sizeof(crypto::public_key);
+        const size_t key_img_size  = sizeof(crypto::key_image);
+        const size_t record_lenght = key_img_size + sizeof(crypto::signature);
+
+        if (decoded_raw_data.size() < header_lenght)
+        {
+            string error_msg = fmt::format("Bad data size from submitted key images raw data.");
+
+            context["has_error"] = true;
+            context["error_msg"] = error_msg;
+
+            return mstch::render(full_page, context);
+
+        }
+
+        // get xmr address stored in this key image file
+        xmr_address = *reinterpret_cast<const account_public_address*>(
+                decoded_raw_data.data());
+
+        size_t no_key_images = (decoded_raw_data.size() - header_lenght) / record_lenght;
+
+        for (size_t n = 0; n < no_key_images; ++n)
+        {
+            const char* record_ptr = decoded_raw_data.data() + header_lenght + n * record_lenght;
+
+            crypto::key_image key_image
+                    = *reinterpret_cast<const crypto::key_image*>(record_ptr);
+
+            crypto::signature signature
+                    = *reinterpret_cast<const crypto::signature*>(record_ptr + key_img_size);
+
+            key_images.emplace_back(key_image, fmt::format("{:s}", signature));
+        }
+    }
+    else if (version == 3 || version == 4)
+    {
+        // key image files of wallets since v0.18. v4 ones come from wallets
+        // that can prove the key images of Carrot outputs
+        epee::wipeable_string plaintext;
+
+        try
+        {
+            plaintext = ::tools::wallet::decrypt_with_ec_key(
+                    decoded_raw_data.data() + magiclen + 1,
+                    decoded_raw_data.size() - magiclen - 1,
+                    prv_view_key, true, 1);
+        }
+        catch (std::exception const& e)
+        {
+            string error_msg = fmt::format("Failed to authenticate key images data. "
+                                                   "Maybe wrong viewkey was porvided?");
+
+            context["has_error"] = true;
+            context["error_msg"] = error_msg;
+
+            return mstch::render(full_page, context);
+        }
+
+        binary_archive<false> ar({reinterpret_cast<const uint8_t*>(plaintext.data()),
+                                  plaintext.size()});
+
+        bool r {false};
+
+        if (version == 3)
+        {
+            ::tools::wallet::cold::key_image_message_v3 msg;
+
+            r = ::serialization::serialize(ar, msg);
+
+            xmr_address = {msg.main_address_spend_pubkey, msg.main_address_view_pubkey};
+
+            for (auto const& key_image_proof: msg.univariate_key_image_proofs)
+            {
+                key_images.emplace_back(key_image_proof.first,
+                                        fmt::format("{:s}", key_image_proof.second));
+            }
+        }
+        else
+        {
+            ::tools::wallet::cold::key_image_message_v4 msg;
+
+            r = ::serialization::serialize(ar, msg);
+
+            xmr_address = {msg.main_address_spend_pubkey, msg.main_address_view_pubkey};
+
+            // the key images of Carrot outputs are proven with FCMP++
+            // SA/L proofs instead of signatures
+            for (auto const& key_image_proof: msg.key_image_proofs)
+            {
+                crypto::signature const* signature
+                        = std::get_if<crypto::signature>(&key_image_proof.second);
+
+                key_images.emplace_back(key_image_proof.first,
+                                        signature ? fmt::format("{:s}", *signature) : string{});
+            }
+        }
+
+        if (!r)
+        {
+            string error_msg = fmt::format("Failed to deserialize the key images data.");
+
+            context["has_error"] = true;
+            context["error_msg"] = error_msg;
+
+            return mstch::render(full_page, context);
+        }
+    }
+    else
+    {
+        string error_msg = fmt::format("Unsupported version of key image export data: {:d}",
+                                       static_cast<uint32_t>(version));
 
         context["has_error"] = true;
         context["error_msg"] = error_msg;
@@ -3758,29 +3939,7 @@ show_checkrawkeyimgs(string raw_data, string viewkey_str)
         return mstch::render(full_page, context);
     }
 
-    // header is public spend and keys
-    const size_t header_lenght = 2 * sizeof(crypto::public_key);
-    const size_t key_img_size  = sizeof(crypto::key_image);
-    const size_t record_lenght = key_img_size + sizeof(crypto::signature);
-    const size_t chacha_length = sizeof(crypto::chacha_key);
-
-    if (decoded_raw_data.size() < header_lenght)
-    {
-        string error_msg = fmt::format("Bad data size from submitted key images raw data.");
-
-        context["has_error"] = true;
-        context["error_msg"] = error_msg;
-
-        return mstch::render(full_page, context);
-
-    }
-
-    // get xmr address stored in this key image file
-    const account_public_address* xmr_address =
-            reinterpret_cast<const account_public_address*>(
-                    decoded_raw_data.data());
-
-    address_parse_info address_info {*xmr_address, false};
+    address_parse_info address_info {xmr_address, false};
 
 
     context.insert({"address"        , REMOVE_HASH_BRAKETS(
@@ -3790,27 +3949,16 @@ show_checkrawkeyimgs(string raw_data, string viewkey_str)
     context.insert({"total_xmr"      , string{}});
     context.insert({"key_imgs"       , mstch::array{}});
 
-
-    size_t no_key_images = (decoded_raw_data.size() - header_lenght) / record_lenght;
-
-    //vector<pair<crypto::key_image, crypto::signature>> signed_key_images;
-
     mstch::array& key_imgs_ctx = boost::get<mstch::array>(context["key_imgs"]);
 
-    for (size_t n = 0; n < no_key_images; ++n)
+    for (size_t n = 0; n < key_images.size(); ++n)
     {
-        const char* record_ptr = decoded_raw_data.data() + header_lenght + n * record_lenght;
-
-        crypto::key_image key_image
-                = *reinterpret_cast<const crypto::key_image*>(record_ptr);
-
-        crypto::signature signature
-                = *reinterpret_cast<const crypto::signature*>(record_ptr + key_img_size);
+        crypto::key_image const& key_image = key_images[n].first;
 
         mstch::map key_img_info {
                 {"key_no"              , fmt::format("{:03d}", n)},
                 {"key_image"           , pod_to_hex(key_image)},
-                {"signature"           , fmt::format("{:s}", signature)},
+                {"signature"           , key_images[n].second},
                 {"address"             , xmreg::print_address(
                                             address_info, nettype)},
                 {"is_spent"            , core_storage->have_tx_keyimg_as_spent(key_image)},
@@ -3820,7 +3968,7 @@ show_checkrawkeyimgs(string raw_data, string viewkey_str)
 
         key_imgs_ctx.push_back(key_img_info);
 
-    } // for (size_t n = 0; n < no_key_images; ++n)
+    } // for (size_t n = 0; n < key_images.size(); ++n)
 
     // render the page
     return mstch::render(full_page, context);
@@ -3873,11 +4021,13 @@ show_checkcheckrawoutput(string raw_data, string viewkey_str)
 
     const size_t magiclen = strlen(OUTPUT_EXPORT_FILE_MAGIC);
 
-    string data_prefix = xmreg::make_printable(decoded_raw_data.substr(0, magiclen));
+    // the magic is followed by a version byte
+    string data_prefix = xmreg::make_printable(decoded_raw_data.substr(0, magiclen + 1));
 
     context["data_prefix"] = data_prefix;
 
-    if (strncmp(decoded_raw_data.c_str(), OUTPUT_EXPORT_FILE_MAGIC, magiclen) != 0)
+    if (decoded_raw_data.size() <= magiclen
+            || strncmp(decoded_raw_data.c_str(), OUTPUT_EXPORT_FILE_MAGIC, magiclen) != 0)
     {
         string error_msg = fmt::format("This does not seem to be output keys export data.");
 
@@ -3887,10 +4037,23 @@ show_checkcheckrawoutput(string raw_data, string viewkey_str)
         return mstch::render(full_page, context);
     }
 
+    // v5 is what wallets that can have Carrot outputs export
+    uint8_t const version = decoded_raw_data[magiclen];
+
+    if (version != 4 && version != 5)
+    {
+        string error_msg = fmt::format("Unsupported version of output keys export data: {:d}",
+                                       static_cast<uint32_t>(version));
+
+        context["has_error"] = true;
+        context["error_msg"] = error_msg;
+
+        return mstch::render(full_page, context);
+    }
 
     // decrypt key images data using private view key
     decoded_raw_data = xmreg::decrypt(
-            std::string(decoded_raw_data, magiclen),
+            std::string(decoded_raw_data, magiclen + 1),
             prv_view_key, true);
 
 
@@ -3936,9 +4099,61 @@ show_checkcheckrawoutput(string raw_data, string viewkey_str)
 
     mstch::array& output_keys_ctx = boost::get<mstch::array>(context["output_keys"]);
 
+    context["are_key_images_known"] = false;
+
+    if (version == 5)
+    {
+        ::tools::wallet::cold::outputs_message_v5 msg;
+
+        binary_archive<false> ar{epee::strspan<std::uint8_t>(decoded_raw_data)};
+
+        if (!::serialization::serialize(ar, msg)
+                || !::serialization::check_stream_state(ar))
+        {
+            context["has_error"] = true;
+            context["error_msg"] = string("Failed to import outputs: cant deserialize them");
+
+            return mstch::render(full_page, context);
+        }
+
+        uint64_t total_xmr {0};
+        uint64_t output_no {0};
+
+        for (auto const& etd_variant: msg.outputs)
+        {
+            mstch::map output_info = std::visit([&](auto const& etd)
+            {
+                using etd_type = std::decay_t<decltype(etd)>;
+
+                if constexpr (std::is_same_v<etd_type,
+                        ::tools::wallet::cold::exported_carrot_transfer_details>)
+                {
+                    total_xmr += etd.amount;
+                    return get_exported_output_mstch(etd, *xmr_address, prv_view_key);
+                }
+                else
+                {
+                    total_xmr += etd.m_amount;
+                    return get_exported_output_mstch(etd);
+                }
+            }, etd_variant);
+
+            output_info["output_no"] = fmt::format("{:03d}", output_no++);
+
+            output_keys_ctx.push_back(output_info);
+        }
+
+        if (total_xmr > 0)
+        {
+            context["has_total_xmr"] = true;
+            context["total_xmr"] = xmreg::xmr_amount_to_str(total_xmr);
+        }
+
+        return mstch::render(full_page, context);
+    }
 
     std::tuple<uint64_t, uint64_t,
-        std::vector<tools::wallet2::exported_transfer_details>> new_outputs;
+        std::vector<::tools::wallet::cold::exported_pre_carrot_transfer_details>> new_outputs;
     std::tuple<uint64_t, uint64_t,
         std::vector<tools::wallet2::transfer_details>> outputs_tuple;
     bool have_new_outputs {false};
@@ -3989,28 +4204,18 @@ show_checkcheckrawoutput(string raw_data, string viewkey_str)
     uint64_t total_xmr {0};
     uint64_t output_no {0};
 
-    context["are_key_images_known"] = false;
-
     // new format only carries exported data (no key images / tx blobs),
     // so render a reduced view and return early
     if (have_new_outputs)
     {
         for (const auto& etd: std::get<2>(new_outputs))
         {
-            uint64_t xmr_amount = etd.m_amount;
+            mstch::map output_info = get_exported_output_mstch(etd);
 
-            mstch::map output_info {
-                    {"output_no"           , fmt::format("{:03d}", output_no)},
-                    {"output_pub_key"      , REMOVE_HASH_BRAKETS(fmt::format("{:s}", etd.m_pubkey))},
-                    {"amount"              , xmreg::xmr_amount_to_str(xmr_amount)},
-                    {"tx_hash"             , string("[exported outputs have no tx hash]")},
-                    {"timestamp"           , string("unknown")},
-                    {"is_spent"            , static_cast<bool>(etd.m_flags.m_spent)},
-                    {"is_ringct"           , static_cast<bool>(etd.m_flags.m_rct)}
-            };
+            output_info["output_no"] = fmt::format("{:03d}", output_no);
 
             ++output_no;
-            total_xmr += xmr_amount;
+            total_xmr += etd.m_amount;
             output_keys_ctx.push_back(output_info);
         }
 
@@ -4111,6 +4316,7 @@ show_checkcheckrawoutput(string raw_data, string viewkey_str)
                 {"output_pub_key"      , REMOVE_HASH_BRAKETS(fmt::format("{:s}", output_pub_key))},
                 {"amount"              , xmreg::xmr_amount_to_str(xmr_amount)},
                 {"tx_hash"             , REMOVE_HASH_BRAKETS(fmt::format("{:s}", td.m_txid))},
+                {"has_tx_hash"         , true},
                 {"timestamp"           , xmreg::timestamp_to_str_gm(blk_timestamp)},
                 {"is_spent"            , is_output_spent},
                 {"is_ringct"           , td.m_rct}
@@ -4627,18 +4833,43 @@ is_v1_tx_blob(cryptonote::blobdata const& tx_blob)
  * OUTPUT_DNE is left to escape, because the callers report it differently.
  */
 void
-get_outputs_and_inputs_json(tx_details const& txd, json& outputs, json& inputs)
+get_outputs_and_inputs_json(transaction const& tx, tx_details const& txd,
+                            json& outputs, json& inputs)
 {
-    for (const auto& output: txd.output_pub_keys)
+    for (size_t i = 0; i < txd.output_pub_keys.size(); ++i)
     {
-        outputs.push_back(json {
+        const auto& output = txd.output_pub_keys[i];
+
+        json j_output {
                 {"public_key", pod_to_hex(std::get<0>(output))},
                 {"amount"    , std::get<1>(output)}
-        });
+        };
+
+        if (i < tx.vout.size())
+        {
+            if (boost::optional<string> view_tag = get_output_view_tag_str(tx.vout[i]))
+                j_output["view_tag"] = *view_tag;
+
+            if (boost::optional<string> anchor = get_output_janus_anchor_str(tx.vout[i]))
+                j_output["encrypted_janus_anchor"] = *anchor;
+        }
+
+        outputs.push_back(j_output);
     }
 
     for (const txin_to_key &in_key: txd.input_key_imgs)
     {
+        // FCMP++ inputs have no rings, only key images
+        if (in_key.key_offsets.empty())
+        {
+            inputs.push_back(json {
+                    {"key_image"  , pod_to_hex(in_key.k_image)},
+                    {"amount"     , in_key.amount},
+                    {"mixins"     , json::array()}
+            });
+
+            continue;
+        }
 
         // get absolute offsets of mixins
         std::vector<uint64_t> absolute_offsets
@@ -4742,10 +4973,27 @@ json_transaction_details(transaction const& tx, uint64_t bc_height,
     json outputs;
     json inputs;
 
-    get_outputs_and_inputs_json(txd, outputs, inputs);
+    get_outputs_and_inputs_json(tx, txd, outputs, inputs);
 
     // get basic tx info
     json j_tx = get_tx_json(tx, txd);
+
+    // instead of tx pubkeys, Carrot txs have enote ephemeral pubkeys
+    if (txd.is_carrot)
+    {
+        json j_pubkeys = json::array();
+
+        for (mx25519_pubkey const& pubkey: get_carrot_enote_ephemeral_pubkeys(tx))
+            j_pubkeys.push_back(pod_to_hex(pubkey));
+
+        j_tx["enote_ephemeral_pubkeys"] = j_pubkeys;
+    }
+
+    // not there for txs that were fetched pruned
+    fcmp_pp_tx_info const fcmp_pp_info = get_fcmp_pp_tx_info(tx);
+
+    if (fcmp_pp_info.available)
+        j_tx["fcmp_pp"] = get_fcmp_pp_tx_info_json(fcmp_pp_info);
 
     // a pruned tx never had its signatures here, so what get_tx_details
     // measured is not the size of the tx that was broadcast. report the
@@ -5527,6 +5775,8 @@ json_block(string block_no_or_hash)
             {"current_height", current_blockchain_height}
     };
 
+    add_fcmp_pp_block_info_json(blk, j_data);
+
     j_response["status"] = "success";
 
     return j_response;
@@ -5649,6 +5899,8 @@ json json_blocks(string start_height_str, string end_height_str)
                 {"txs"           , j_txs},
                 {"current_height", current_blockchain_height}
         });
+
+        add_fcmp_pp_block_info_json(blk, j_blocks.back());
     }
 
     j_data = j_blocks;
@@ -6120,16 +6372,23 @@ json_outputs(string tx_hash_str,
 
     }
 
-    // parse string representing given private key
+    // parse string representing given private key. to prove sending in a
+    // Carrot tx, several tx private keys can be given, concatenated
     crypto::secret_key prv_view_key;
 
-    if (!xmreg::parse_str_secret_key(viewkey_str, prv_view_key))
+    std::vector<crypto::secret_key> tx_secret_keys;
+
+    if (!xmreg::parse_str_secret_key(viewkey_str, tx_secret_keys)
+            || tx_secret_keys.empty()
+            || (tx_secret_keys.size() > 1 && !tx_prove))
     {
         j_response["status"]  = "error";
         j_response["message"] = "Cant parse view key or tx private key: "
                                 + viewkey_str;
         return j_response;
     }
+
+    prv_view_key = tx_secret_keys[0];
 
     // get transaction
     transaction tx;
@@ -6152,110 +6411,160 @@ json_outputs(string tx_hash_str,
 
     tx_details txd = get_tx_details(tx);
 
-    // public transaction key is combined with our viewkey
-    // to create, so called, derived key.
-    key_derivation derivation;
-    std::vector<key_derivation> additional_derivations(txd.additional_pks.size());
+    j_data["outputs"] = json::array();
+    json& j_outptus   = j_data["outputs"];
 
-    public_key pub_key = tx_prove ? address_info.address.m_view_public_key : txd.pk;
+    // Carrot outputs are found with X25519 shared secrets instead of
+    // the key derivations of pre-Carrot outputs
+    if (txd.is_carrot)
+    {
+        vector<carrot_output_info> outputs_info;
+        string error_msg;
 
-    //cout << "txd.pk: " << pod_to_hex(txd.pk) << endl;
+        bool const scanned = tx_prove
+                ? scan_carrot_tx_as_sender(tx, address_info, tx_secret_keys,
+                                           outputs_info, error_msg)
+                : scan_carrot_tx_as_receiver(tx, address_info, prv_view_key,
+                                             outputs_info, error_msg);
 
-    if (!generate_key_derivation(pub_key, prv_view_key, derivation))
+        if (!scanned)
+        {
+            j_response["status"]  = "error";
+            j_response["message"] = error_msg;
+            return j_response;
+        }
+
+        for (size_t output_idx = 0; output_idx < txd.output_pub_keys.size(); ++output_idx)
+        {
+            carrot_output_info const& output_info = outputs_info.at(output_idx);
+
+            // amounts of coinbase outputs are in plain sight
+            json j_output {
+                    {"output_pubkey", pod_to_hex(std::get<0>(txd.output_pub_keys[output_idx]))},
+                    {"amount"       , output_info.mine
+                                      ? output_info.amount
+                                      : std::get<1>(txd.output_pub_keys[output_idx])},
+                    {"match"        , output_info.mine},
+                    {"output_idx"   , output_idx},
+            };
+
+            if (output_info.payment_id)
+                j_output["payment_id"] = pod_to_hex(*output_info.payment_id);
+
+            j_outptus.push_back(j_output);
+        }
+    }
+    else if (tx_secret_keys.size() > 1)
     {
         j_response["status"]  = "error";
-        j_response["message"] = "Cant calculate key_derivation";
+        j_response["message"] = "Cant parse view key or tx private key: "
+                                + viewkey_str;
         return j_response;
     }
-    for (size_t i = 0; i < txd.additional_pks.size(); ++i)
+    else
     {
-        if (!generate_key_derivation(txd.additional_pks[i], prv_view_key, additional_derivations[i]))
+        // public transaction key is combined with our viewkey
+        // to create, so called, derived key.
+        key_derivation derivation;
+        std::vector<key_derivation> additional_derivations(txd.additional_pks.size());
+
+        public_key pub_key = tx_prove ? address_info.address.m_view_public_key : txd.pk;
+
+        //cout << "txd.pk: " << pod_to_hex(txd.pk) << endl;
+
+        if (!generate_key_derivation(pub_key, prv_view_key, derivation))
         {
             j_response["status"]  = "error";
             j_response["message"] = "Cant calculate key_derivation";
             return j_response;
         }
-    }
-
-    uint64_t output_idx {0};
-
-    std::vector<uint64_t> money_transfered(tx.vout.size(), 0);
-
-    j_data["outputs"] = json::array();
-    json& j_outptus   = j_data["outputs"];
-
-    for (output_tuple_with_tag& outp: txd.output_pub_keys)
-    {
-
-        // get the tx output public key
-        // that normally would be generated for us,
-        // if someone had sent us some xmr.
-        public_key tx_pubkey;
-
-        derive_public_key(derivation,
-                          output_idx,
-                          address_info.address.m_spend_public_key,
-                          tx_pubkey);
-
-        // check if generated public key matches the current output's key
-        bool mine_output = (std::get<0>(outp) == tx_pubkey);
-        bool with_additional = false;
-        if (!mine_output && txd.additional_pks.size() == txd.output_pub_keys.size())
+        for (size_t i = 0; i < txd.additional_pks.size(); ++i)
         {
-            derive_public_key(additional_derivations[output_idx],
+            if (!generate_key_derivation(txd.additional_pks[i], prv_view_key, additional_derivations[i]))
+            {
+                j_response["status"]  = "error";
+                j_response["message"] = "Cant calculate key_derivation";
+                return j_response;
+            }
+        }
+
+        uint64_t output_idx {0};
+
+        std::vector<uint64_t> money_transfered(tx.vout.size(), 0);
+
+        for (output_tuple_with_tag& outp: txd.output_pub_keys)
+        {
+
+            // get the tx output public key
+            // that normally would be generated for us,
+            // if someone had sent us some xmr.
+            public_key tx_pubkey;
+
+            derive_public_key(derivation,
                               output_idx,
                               address_info.address.m_spend_public_key,
                               tx_pubkey);
-            mine_output = (std::get<0>(outp) == tx_pubkey);
-            with_additional = true;
-        }
 
-        uint64_t xmr_amount  = std::get<1>(outp);
-
-        // if mine output has RingCT, i.e., tx version is 2
-        if (mine_output && tx.version == 2)
-        {
-            // cointbase txs have amounts in plain sight.
-            // so use amount from ringct, only for non-coinbase txs
-            if (!tx.is_coinbase())
+            // check if generated public key matches the current output's key
+            bool mine_output = (std::get<0>(outp) == tx_pubkey);
+            bool with_additional = false;
+            if (!mine_output && txd.additional_pks.size() == txd.output_pub_keys.size())
             {
-
-                // initialize with regular amount
-                uint64_t rct_amount = money_transfered[output_idx];
-
-                bool r;
-
-                auto derivation_to_use = with_additional
-                        ? additional_derivations[output_idx] : derivation;
-
-                r = decode_ringct(tx.rct_signatures,
-                                  derivation_to_use,
+                derive_public_key(additional_derivations[output_idx],
                                   output_idx,
-                                  tx.rct_signatures.ecdhInfo[output_idx].mask,
-                                  rct_amount);
+                                  address_info.address.m_spend_public_key,
+                                  tx_pubkey);
+                mine_output = (std::get<0>(outp) == tx_pubkey);
+                with_additional = true;
+            }
 
-                if (!r)
+            uint64_t xmr_amount  = std::get<1>(outp);
+
+            // if mine output has RingCT, i.e., tx version is 2
+            if (mine_output && tx.version == 2)
+            {
+                // cointbase txs have amounts in plain sight.
+                // so use amount from ringct, only for non-coinbase txs
+                if (!tx.is_coinbase())
                 {
-                    cerr << "\nshow_my_outputs: Cant decode ringCT! " << endl;
-                }
 
-                xmr_amount         = rct_amount;
-                money_transfered[output_idx] = rct_amount;
+                    // initialize with regular amount
+                    uint64_t rct_amount = money_transfered[output_idx];
 
-            } // if (!tx.is_coinbase())
+                    bool r;
 
-        }  // if (mine_output && tx.version == 2)
+                    auto derivation_to_use = with_additional
+                            ? additional_derivations[output_idx] : derivation;
 
-        j_outptus.push_back(json {
-                {"output_pubkey", pod_to_hex(std::get<0>(outp))},
-                {"amount"       , xmr_amount},
-                {"match"        , mine_output},
-                {"output_idx"   , output_idx},
-        });
+                    r = decode_ringct(tx.rct_signatures,
+                                      derivation_to_use,
+                                      output_idx,
+                                      tx.rct_signatures.ecdhInfo[output_idx].mask,
+                                      rct_amount);
 
-        ++output_idx;
+                    if (!r)
+                    {
+                        cerr << "\nshow_my_outputs: Cant decode ringCT! " << endl;
+                    }
 
-    } // for (pair<public_key, uint64_t>& outp: txd.output_pub_keys)
+                    xmr_amount         = rct_amount;
+                    money_transfered[output_idx] = rct_amount;
+
+                } // if (!tx.is_coinbase())
+
+            }  // if (mine_output && tx.version == 2)
+
+            j_outptus.push_back(json {
+                    {"output_pubkey", pod_to_hex(std::get<0>(outp))},
+                    {"amount"       , xmr_amount},
+                    {"match"        , mine_output},
+                    {"output_idx"   , output_idx},
+            });
+
+            ++output_idx;
+
+        } // for (pair<public_key, uint64_t>& outp: txd.output_pub_keys)
+    }
 
     // if we don't already have the tx_timestamp from the mempool
     // then read it from the block that the transaction is in
@@ -6410,7 +6719,7 @@ json_outputsblocks(string startblock,
         }
 
         if (!find_our_outputs(
-                address_info.address, prv_view_key,
+                address_info, prv_view_key,
                 0 /* block_no */, true /*is mempool*/,
                 tmp_vector.cbegin(), tmp_vector.cend(),
                 j_outptus /* found outputs are pushed to this*/,
@@ -6456,7 +6765,7 @@ json_outputsblocks(string startblock,
         (void) missed_txs;
 
         if (!find_our_outputs(
-                address_info.address, prv_view_key,
+                address_info, prv_view_key,
                 block_no, false /*is mempool*/,
                 blk_txs.cbegin(), blk_txs.cend(),
                 j_outptus /* found outputs are pushed to this*/,
@@ -6646,7 +6955,7 @@ get_payment_id_as_string(
 template <typename Iterator>
 bool
 find_our_outputs(
-        account_public_address const& address,
+        address_parse_info const& address_info,
         secret_key const& prv_view_key,
         uint64_t const& block_no,
         bool const& is_mempool,
@@ -6655,6 +6964,7 @@ find_our_outputs(
         json& j_outptus,
         string& error_msg)
 {
+    account_public_address const& address = address_info.address;
 
     // for each tx, perform output search using provided
     // address and viewkey
@@ -6663,6 +6973,45 @@ find_our_outputs(
         cryptonote::transaction const& tx = *it;
 
         tx_details txd = get_tx_details(tx);
+
+        // Carrot outputs are found with X25519 shared secrets instead of
+        // the key derivations of pre-Carrot outputs
+        if (txd.is_carrot)
+        {
+            vector<carrot_output_info> outputs_info;
+            string scan_error_msg;
+
+            // a tx that cant be scanned has no outputs of ours to be found
+            if (!scan_carrot_tx_as_receiver(tx, address_info, prv_view_key,
+                                            outputs_info, scan_error_msg))
+            {
+                cerr << "Cant scan Carrot tx " << txd.hash << ": "
+                     << scan_error_msg << '\n';
+                continue;
+            }
+
+            for (size_t output_idx = 0; output_idx < outputs_info.size(); ++output_idx)
+            {
+                carrot_output_info const& output_info = outputs_info[output_idx];
+
+                if (!output_info.mine)
+                    continue;
+
+                j_outptus.push_back(json {
+                        {"output_pubkey" , pod_to_hex(std::get<0>(txd.output_pub_keys.at(output_idx)))},
+                        {"amount"        , output_info.amount},
+                        {"block_no"      , block_no},
+                        {"in_mempool"    , is_mempool},
+                        {"output_idx"    , output_idx},
+                        {"tx_hash"       , pod_to_hex(txd.hash)},
+                        {"payment_id"    , output_info.payment_id
+                                           ? pod_to_hex(*output_info.payment_id)
+                                           : string{}}
+                });
+            }
+
+            continue;
+        }
 
         // public transaction key is combined with our viewkey
         // to create, so called, derived key.
@@ -6992,6 +7341,24 @@ construct_tx_context(transaction tx, uint16_t with_ring_signatures = 0)
 
     context["add_tx_pub_keys"] = add_tx_pub_keys;
 
+    // instead of tx pubkeys, Carrot txs have enote ephemeral pubkeys D_e:
+    // either one shared by all the outputs, or one for each output
+    vector<mx25519_pubkey> const enote_ephemeral_pubkeys
+            = txd.is_carrot ? get_carrot_enote_ephemeral_pubkeys(tx)
+                            : vector<mx25519_pubkey>{};
+
+    bool const per_output_enote_ephemeral_pubkeys
+            = enote_ephemeral_pubkeys.size() > 1;
+
+    context["is_carrot"]  = txd.is_carrot;
+    context["is_fcmp_pp"] = txd.is_fcmp_pp;
+    context["enote_ephemeral_pubkey"] = enote_ephemeral_pubkeys.size() == 1
+                                        ? pod_to_hex(enote_ephemeral_pubkeys[0])
+                                        : string{};
+    context["per_output_enote_ephemeral_pubkeys"] = per_output_enote_ephemeral_pubkeys;
+
+    add_fcmp_pp_tx_info(get_fcmp_pp_tx_info(tx), context);
+
     string server_time_str = xmreg::timestamp_to_str_gm(server_timestamp, "%F");
 
     mstch::array inputs = mstch::array{};
@@ -7030,6 +7397,27 @@ construct_tx_context(transaction tx, uint16_t with_ring_signatures = 0)
         if (show_part_of_inputs && (input_idx > max_no_of_inputs_to_show))
             break;
 
+        // FCMP++ inputs have no rings, their real output is hidden among all
+        // the outputs in the curve tree. So only their key images can be shown
+        if (in_key.key_offsets.empty())
+        {
+            inputs.push_back(mstch::map {
+                    {"in_key_img"      , pod_to_hex(in_key.k_image)},
+                    {"amount"          , xmreg::xmr_amount_to_str(in_key.amount)},
+                    {"input_idx"       , fmt::format("{:02d}", input_idx)},
+                    {"mixins"          , mstch::array{}},
+                    {"ring_sigs"       , mstch::array{}},
+                    {"already_spent"   , false}, // placeholder for later
+                    {"is_fcmp_pp_input", true}
+            });
+
+            have_any_unknown_amount = true;
+
+            input_idx++;
+
+            continue;
+        }
+
         // get absolute offsets of mixins
         std::vector<uint64_t> absolute_offsets
                 = cryptonote::relative_output_offsets_to_absolute(
@@ -7051,7 +7439,7 @@ construct_tx_context(transaction tx, uint16_t with_ring_signatures = 0)
             //core_storage->get_db().get_output_key(in_key.amount,
                                                   //absolute_offsets,
                                                   //outputs);
-            
+
             get_output_key<BlockchainDB>(in_key.amount,
                                            absolute_offsets,
                                            outputs);
@@ -7077,12 +7465,13 @@ construct_tx_context(transaction tx, uint16_t with_ring_signatures = 0)
         }
 
         inputs.push_back(mstch::map {
-                {"in_key_img"   , pod_to_hex(in_key.k_image)},
-                {"amount"       , xmreg::xmr_amount_to_str(in_key.amount)},
-                {"input_idx"    , fmt::format("{:02d}", input_idx)},
-                {"mixins"       , mstch::array{}},
-                {"ring_sigs"    , mstch::array{}},
-                {"already_spent", false} // placeholder for later
+                {"in_key_img"      , pod_to_hex(in_key.k_image)},
+                {"amount"          , xmreg::xmr_amount_to_str(in_key.amount)},
+                {"input_idx"       , fmt::format("{:02d}", input_idx)},
+                {"mixins"          , mstch::array{}},
+                {"ring_sigs"       , mstch::array{}},
+                {"already_spent"   , false}, // placeholder for later
+                {"is_fcmp_pp_input", false}
         });
 
         if (detailed_view)
@@ -7213,7 +7602,8 @@ construct_tx_context(transaction tx, uint16_t with_ring_signatures = 0)
 
     } // for (const txin_to_key& in_key: txd.input_key_imgs)
 
-
+    // FCMP++ inputs have no ring members to put on the timescales
+    context["has_ring_members"] = !mixin_timestamp_groups.empty();
 
     if (detailed_view)
     {
@@ -7306,15 +7696,20 @@ construct_tx_context(transaction tx, uint16_t with_ring_signatures = 0)
 
         outputs_xmr_sum += std::get<1>(outp);
 
-        std::stringstream ss;
-        if (std::get<2>(outp)) {
-            ss << *(std::get<2>(outp));
-        }
-        else {
-          ss << "-";
-        }
-        string view_tag_str = ss.str();
+        // view tags are one byte in pre-Carrot outputs and three in Carrot ones
+        boost::optional<string> const view_tag
+                = get_output_view_tag_str(tx.vout.at(output_idx));
 
+        string const view_tag_str = view_tag ? "<" + *view_tag + ">" : string("-");
+
+        boost::optional<string> const janus_anchor
+                = get_output_janus_anchor_str(tx.vout.at(output_idx));
+
+        string const enote_ephemeral_pubkey
+                = per_output_enote_ephemeral_pubkeys
+                          && output_idx < enote_ephemeral_pubkeys.size()
+                  ? pod_to_hex(enote_ephemeral_pubkeys[output_idx])
+                  : string{};
 
         outputs.push_back(mstch::map {
                 {"out_pub_key"           , pod_to_hex(std::get<0>(outp))},
@@ -7322,6 +7717,8 @@ construct_tx_context(transaction tx, uint16_t with_ring_signatures = 0)
                 {"amount_idx"            , out_amount_index_str},
                 {"num_outputs"           , num_outputs_amount},
                 {"output_tag"            , view_tag_str},
+                {"janus_anchor"          , janus_anchor ? *janus_anchor : string{}},
+                {"enote_ephemeral_pubkey", enote_ephemeral_pubkey},
                 {"unformated_output_idx" , output_idx},
                 {"output_idx"            , fmt::format("{:02d}", output_idx++)}
         });
@@ -7424,6 +7821,9 @@ get_tx_details(const transaction& tx,
     txd.pk = xmreg::get_tx_pub_key_from_received_outs(tx);
     txd.additional_pks = cryptonote::get_additional_tx_pub_keys_from_extra(tx);
 
+    txd.is_carrot  = is_carrot_tx(tx);
+    txd.is_fcmp_pp = is_fcmp_pp_tx(tx);
+
 
     // sum xmr in inputs and ouputs in the given tx
     const array<uint64_t, 4>& sum_data = summary_of_in_out_rct(
@@ -7490,6 +7890,336 @@ get_tx_details(const transaction& tx,
     }
 
     return txd;
+}
+
+fcmp_pp_tx_info
+get_fcmp_pp_tx_info(transaction const& tx)
+{
+    fcmp_pp_tx_info info;
+
+    if (!is_fcmp_pp_tx(tx) || tx.pruned)
+        return info;
+
+    rct::rctSigPrunable const& prunable = tx.rct_signatures.p;
+
+    info.available       = true;
+    info.reference_block = prunable.reference_block;
+    info.n_tree_layers   = prunable.n_tree_layers;
+    info.proof_size      = prunable.fcmp_pp.size();
+
+    try
+    {
+        crypto::ec_point tree_root;
+
+        core_storage->get_db().get_tree_root_at_blk_idx(
+                prunable.reference_block, tree_root);
+
+        info.n_leaf_tuples = core_storage->get_db().get_block_n_leaf_tuples(
+                prunable.reference_block);
+
+        info.tree_root      = pod_to_hex(tree_root);
+        info.have_tree_info = true;
+    }
+    catch (std::exception const& e)
+    {
+        cerr << "Cant get FCMP++ tree info as of block "
+             << prunable.reference_block << ": " << e.what() << '\n';
+    }
+
+    return info;
+}
+
+void
+add_fcmp_pp_tx_info(fcmp_pp_tx_info const& info, mstch::map& context)
+{
+    context["fcmp_pp_info_available"]  = info.available;
+    context["fcmp_pp_reference_block"] = info.reference_block;
+    context["fcmp_pp_n_tree_layers"]   = info.n_tree_layers;
+    context["fcmp_pp_proof_size"]      = info.proof_size;
+    context["fcmp_pp_have_tree_info"]  = info.have_tree_info;
+    context["fcmp_pp_tree_root"]       = info.tree_root;
+    context["fcmp_pp_n_leaf_tuples"]   = info.n_leaf_tuples;
+}
+
+// FCMP++ blocks commit to a state of the curve tree, so that FCMP++ proofs
+// can be verified with block headers alone
+void
+add_fcmp_pp_block_info(block const& blk, uint64_t blk_height, mstch::map& context)
+{
+    bool const is_fcmp_pp_block = blk.major_version >= HF_VERSION_FCMP_PLUS_PLUS;
+
+    context["is_fcmp_pp_block"]            = is_fcmp_pp_block;
+    context["fcmp_pp_have_n_leaf_tuples"]  = false;
+
+    if (!is_fcmp_pp_block)
+        return;
+
+    context["fcmp_pp_n_tree_layers"] = static_cast<uint64_t>(blk.fcmp_pp_n_tree_layers);
+    context["fcmp_pp_tree_root"]     = pod_to_hex(blk.fcmp_pp_tree_root);
+
+    // the tree root in a block is the one as of this block index
+    uint64_t const tree_blk_idx = blk_height > 0
+            ? cryptonote::get_default_last_locked_block_index(blk_height - 1) : 0;
+
+    try
+    {
+        context["fcmp_pp_n_leaf_tuples"]
+                = core_storage->get_db().get_block_n_leaf_tuples(tree_blk_idx);
+        context["fcmp_pp_have_n_leaf_tuples"] = true;
+    }
+    catch (std::exception const& e)
+    {
+        cerr << "Cant get the number of outputs in the FCMP++ tree as of block "
+             << tree_blk_idx << ": " << e.what() << '\n';
+    }
+}
+
+// unsigned and signed tx sets are encrypted with the private viewkey of
+// the wallet that made them
+template <typename TxSet, typename DecryptFunc>
+bool
+decrypt_tx_set(string const& data,
+               string const& viewkey_str,
+               DecryptFunc decrypt,
+               TxSet& tx_set,
+               string& error_msg)
+{
+    if (viewkey_str.empty())
+    {
+        error_msg = "Transaction sets are encrypted with the private viewkey "
+                    "of the wallet that made them. Provide the viewkey to "
+                    "check them.";
+        return false;
+    }
+
+    crypto::secret_key prv_view_key;
+
+    if (!xmreg::parse_str_secret_key(viewkey_str, prv_view_key))
+    {
+        error_msg = "Cant parse the private viewkey";
+        return false;
+    }
+
+    try
+    {
+        // 1 is the default number of kdf rounds of wallets
+        decrypt(data, prv_view_key, 1, tx_set);
+    }
+    catch (std::exception const& e)
+    {
+        error_msg = fmt::format("Failed to decrypt the transaction set: {:s}. "
+                                "Maybe a wrong viewkey was provided?", e.what());
+        return false;
+    }
+
+    return true;
+}
+
+string
+carrot_destination_to_str(carrot::CarrotDestinationV1 const& destination)
+{
+    account_public_address const address {destination.address_spend_pubkey,
+                                          destination.address_view_pubkey};
+
+    if (destination.payment_id != carrot::null_payment_id)
+    {
+        return get_account_integrated_address_as_str(
+                nettype, address,
+                carrot::raw_byte_convert<crypto::hash8>(destination.payment_id));
+    }
+
+    return get_account_address_as_str(nettype, destination.is_subaddress, address);
+}
+
+// The Carrot tx proposals of unsigned and signed tx sets. Unlike pre-Carrot
+// ones, they have no ring members to show, only the outputs they spend and
+// who gets how much. For signed tx sets, the key images of the spent outputs
+// are known too.
+mstch::array
+get_carrot_tx_proposals_mstch(
+        std::vector<::tools::wallet::cold::HotColdCarrotTransactionProposalV1> const& tx_proposals,
+        std::unordered_map<crypto::public_key, crypto::key_image> const& key_images = {})
+{
+    mstch::array proposals;
+
+    for (auto const& tx_proposal: tx_proposals)
+    {
+        mstch::array inputs;
+
+        for (size_t i = 0; i < tx_proposal.input_onetime_addresses.size(); ++i)
+        {
+            crypto::public_key const& onetime_address
+                    = tx_proposal.input_onetime_addresses[i];
+
+            auto const key_image = key_images.find(onetime_address);
+
+            bool const has_key_image = key_image != key_images.end();
+
+            inputs.push_back(mstch::map {
+                    {"input_idx"      , fmt::format("{:02d}", i)},
+                    {"onetime_address", pod_to_hex(onetime_address)},
+                    {"has_key_image"  , has_key_image},
+                    {"key_image"      , has_key_image
+                                        ? pod_to_hex(key_image->second) : string{}},
+                    {"already_spent"  , has_key_image
+                                        && core_storage->get_db().has_key_image(key_image->second)}
+            });
+        }
+
+        mstch::array dest_infos;
+
+        for (auto const& payment: tx_proposal.normal_payment_proposals)
+        {
+            dest_infos.push_back(mstch::map {
+                    {"dest_address", carrot_destination_to_str(payment.destination)},
+                    {"dest_amount" , xmreg::xmr_amount_to_str(payment.amount)}
+            });
+        }
+
+        mstch::array selfsends;
+
+        for (auto const& selfsend: tx_proposal.selfsend_payment_proposals)
+        {
+            selfsends.push_back(mstch::map {
+                    {"amount"       , xmreg::xmr_amount_to_str(selfsend.amount)},
+                    {"enote_type"   , string(selfsend.enote_type == carrot::CarrotEnoteType::CHANGE
+                                             ? "change" : "payment")},
+                    {"subaddr_index", fmt::format("{:d}/{:d}",
+                                                  selfsend.subaddr_index.major,
+                                                  selfsend.subaddr_index.minor)}
+            });
+        }
+
+        proposals.push_back(mstch::map {
+                {"fee"         , xmreg::xmr_amount_to_str(tx_proposal.fee, "{:0.12f}", false)},
+                {"no_of_inputs", static_cast<uint64_t>(inputs.size())},
+                {"inputs"      , inputs},
+                {"dest_infos"  , dest_infos},
+                {"selfsends"   , selfsends}
+        });
+    }
+
+    return proposals;
+}
+
+// A pre-Carrot output of a wallet's output export. Its tx is found by its
+// global output index
+mstch::map
+get_exported_output_mstch(::tools::wallet::cold::exported_pre_carrot_transfer_details const& etd)
+{
+    mstch::map output_info {
+            {"output_pub_key", pod_to_hex(etd.m_pubkey)},
+            {"amount"        , xmreg::xmr_amount_to_str(etd.m_amount)},
+            {"tx_hash"       , string("[exported outputs have no tx hash]")},
+            {"has_tx_hash"   , false},
+            {"timestamp"     , string("unknown")},
+            {"is_spent"      , static_cast<bool>(etd.m_flags.m_spent)},
+            {"is_ringct"     , static_cast<bool>(etd.m_flags.m_rct)}
+    };
+
+    try
+    {
+        uint64_t const amount = etd.m_flags.m_rct ? 0 : etd.m_amount;
+
+        auto const output_key = core_storage->get_db().get_output_key(
+                amount, etd.m_global_output_index);
+
+        if (output_key.data.pubkey == etd.m_pubkey)
+        {
+            output_info["tx_hash"] = pod_to_hex(core_storage->get_db()
+                    .get_output_tx_and_index(amount, etd.m_global_output_index).first);
+            output_info["has_tx_hash"] = true;
+
+            output_info["timestamp"] = xmreg::timestamp_to_str_gm(
+                    core_storage->get_db().get_block_timestamp(output_key.data.height));
+        }
+    }
+    catch (std::exception const& e)
+    {
+        cerr << "Cant find the tx of exported output "
+             << pod_to_hex(etd.m_pubkey) << ": " << e.what() << '\n';
+    }
+
+    return output_info;
+}
+
+// A Carrot output of a wallet's output export. Carrot outputs are exported
+// without their one-time address, which can only be recomputed for wallets
+// with the pre-Carrot key hierarchy, and without their tx. Only for coinbase
+// outputs is the block exported, so only their tx can be found: it is the
+// coinbase tx of the block. Other outputs only have the first key image of
+// their tx exported, and txs cant be looked up by key image
+mstch::map
+get_exported_output_mstch(::tools::wallet::cold::exported_carrot_transfer_details const& etd,
+                          account_public_address const& address,
+                          secret_key const& prv_view_key)
+{
+    mstch::map output_info {
+            {"output_pub_key", string("[unknown for this wallet]")},
+            {"amount"        , xmreg::xmr_amount_to_str(etd.amount)},
+            {"tx_hash"       , string("[exported outputs have no tx hash]")},
+            {"has_tx_hash"   , false},
+            {"timestamp"     , string("unknown")},
+            {"is_spent"      , static_cast<bool>(etd.flags.m_spent)},
+            {"is_ringct"     , true}
+    };
+
+    try
+    {
+        auto const k_view_dev = std::make_shared<
+                carrot::cryptonote_view_incoming_key_ram_borrowed_device>(prv_view_key);
+
+        carrot::cryptonote_hierarchy_address_device const addr_dev(
+                k_view_dev, address.m_spend_public_key);
+
+        output_info["output_pub_key"] = pod_to_hex(
+                ::tools::wallet::cold::import_cold_carrot_output(
+                        etd, addr_dev, nullptr).get_public_key());
+    }
+    catch (std::exception const& e)
+    {
+        cerr << "Cant recompute the one-time address of an exported Carrot output: "
+             << e.what() << '\n';
+    }
+
+    block blk;
+
+    if (etd.flags.m_coinbase && mcore->get_block_by_height(etd.block_index, blk))
+    {
+        output_info["tx_hash"]     = pod_to_hex(get_transaction_hash(blk.miner_tx));
+        output_info["has_tx_hash"] = true;
+        output_info["timestamp"]   = xmreg::timestamp_to_str_gm(blk.timestamp);
+    }
+
+    return output_info;
+}
+
+void
+add_fcmp_pp_block_info_json(block const& blk, json& j_block)
+{
+    if (blk.major_version < HF_VERSION_FCMP_PLUS_PLUS)
+        return;
+
+    j_block["fcmp_pp_n_tree_layers"] = blk.fcmp_pp_n_tree_layers;
+    j_block["fcmp_pp_tree_root"]     = pod_to_hex(blk.fcmp_pp_tree_root);
+}
+
+json
+get_fcmp_pp_tx_info_json(fcmp_pp_tx_info const& info)
+{
+    json j_info {
+            {"reference_block", info.reference_block},
+            {"n_tree_layers"  , info.n_tree_layers},
+            {"proof_size"     , info.proof_size}
+    };
+
+    if (info.have_tree_info)
+    {
+        j_info["tree_root"]     = info.tree_root;
+        j_info["n_leaf_tuples"] = info.n_leaf_tuples;
+    }
+
+    return j_info;
 }
 
 // Show only the first and last few characters of a secret. Used everywhere a

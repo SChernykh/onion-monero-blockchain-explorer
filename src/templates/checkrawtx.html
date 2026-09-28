@@ -107,6 +107,57 @@
 
         {{/unsigned_tx_given}}
 
+        {{#carrot_txs}}
+            <div class="center" style="width: 100%; margin-top:10px">
+                <h4>Carrot transaction</h4>
+                <h5>
+                    {{#dest_infos}}
+                        Send {{dest_amount}} to {{dest_address}}<br/>
+                    {{/dest_infos}}
+                    {{#selfsends}}
+                        Send {{amount}} to own subaddress {{subaddr_index}} ({{enote_type}})<br/>
+                    {{/selfsends}}
+                    Fee: {{fee}}
+                </h5>
+
+                <h4>Outputs spent by this tx ({{no_of_inputs}})</h4>
+                <table class="center">
+                    <tr>
+                        <td>Stealth address</td>
+                        {{#signed_carrot_txs}}
+                            <td>Key image</td>
+                            <td>Already spent</td>
+                        {{/signed_carrot_txs}}
+                    </tr>
+                    {{#inputs}}
+                        <tr>
+                            <td>{{input_idx}}: {{onetime_address}}</td>
+                            {{#has_key_image}}
+                                <td>{{key_image}}</td>
+                                <td>
+                                    {{#already_spent}}
+                                        <span style="color: red; font-weight: bold;">True</span>
+                                    {{/already_spent}}
+                                    {{^already_spent}}
+                                        False
+                                    {{/already_spent}}
+                                </td>
+                            {{/has_key_image}}
+                        </tr>
+                    {{/inputs}}
+                </table>
+            </div>
+        {{/carrot_txs}}
+
+        {{#signed_carrot_txs}}
+            <h4>
+                Signed Carrot transaction data only has the spend authorization
+                signatures of the inputs. The wallet that made the unsigned
+                transaction data has to add the FCMP++ membership proofs
+                before the transactions can be pushed.
+            </h4>
+        {{/signed_carrot_txs}}
+
 
     </div>
 

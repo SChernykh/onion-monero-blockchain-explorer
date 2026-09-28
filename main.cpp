@@ -532,12 +532,17 @@ main(int ac, const char* av[])
             string raw_tx_data = remove_bad_chars(post_body["rawtxdata"]);
             string action      = remove_bad_chars(post_body["action"]);
 
+            // only needed for tx sets, which wallets encrypt with their viewkey
+            string viewkey     = post_body.count("viewkey")
+                                 ? remove_bad_chars(post_body["viewkey"])
+                                 : string {};
+
             if (action == "check")
                 return myxmr::htmlresponse(
-                        xmrblocks.show_checkrawtx(raw_tx_data, action));
+                        xmrblocks.show_checkrawtx(raw_tx_data, action, viewkey));
             else if (action == "push")
                 return myxmr::htmlresponse(
-                        xmrblocks.show_pushrawtx(raw_tx_data, action));
+                        xmrblocks.show_pushrawtx(raw_tx_data, action, viewkey));
             return string("Provided action is neither check nor push");
 
         });

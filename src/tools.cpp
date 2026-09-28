@@ -1317,4 +1317,356 @@ to_string_uint128(const boost::multiprecision::uint128_t &amount) {
     return ss.str();
 }
 
+
+bool
+is_carrot_tx(const transaction& tx)
+{
+    return carrot::is_carrot_transaction_v1(tx);
+}
+
+bool
+is_fcmp_pp_tx(const transaction& tx)
+{
+    return rct::is_rct_fcmp(tx.rct_signatures.type);
+}
+
+boost::optional<string>
+get_output_view_tag_str(const tx_out& txout)
+{
+    if (txout.target.type() == typeid(txout_to_tagged_key))
+    {
+        return epee::string_tools::pod_to_hex(
+                boost::get<txout_to_tagged_key>(txout.target).view_tag);
+    }
+
+    if (txout.target.type() == typeid(txout_to_carrot_v1))
+    {
+        return epee::string_tools::pod_to_hex(
+                boost::get<txout_to_carrot_v1>(txout.target).view_tag);
+    }
+
+    return boost::none;
+}
+
+boost::optional<string>
+get_output_janus_anchor_str(const tx_out& txout)
+{
+    if (txout.target.type() != typeid(txout_to_carrot_v1))
+        return boost::none;
+
+    return epee::string_tools::pod_to_hex(
+            boost::get<txout_to_carrot_v1>(txout.target).encrypted_janus_anchor);
+}
+
+vector<mx25519_pubkey>
+get_carrot_enote_ephemeral_pubkeys(const transaction& tx)
+{
+    vector<mx25519_pubkey> enote_ephemeral_pubkeys;
+    std::optional<carrot::encrypted_payment_id_t> encrypted_payment_id;
+
+    if (!carrot::try_load_carrot_extra_v1(tx.extra,
+                                          enote_ephemeral_pubkeys,
+                                          encrypted_payment_id))
+    {
+        enote_ephemeral_pubkeys.clear();
+    }
+
+    return enote_ephemeral_pubkeys;
+}
+
+namespace
+{
+
+// Get what scanning the outputs of a Carrot tx needs from its extra: the
+// enote ephemeral pubkeys and the encrypted payment id
+bool
+load_carrot_tx_scan_data(
+        const transaction& tx,
+        vector<mx25519_pubkey>& enote_ephemeral_pubkeys,
+        std::optional<carrot::encrypted_payment_id_t>& encrypted_payment_id,
+        string& error_msg)
+{
+    if (!is_carrot_tx(tx))
+    {
+        error_msg = "Not a Carrot transaction";
+        return false;
+    }
+
+    if (!carrot::try_load_carrot_extra_v1(tx.extra,
+                                          enote_ephemeral_pubkeys,
+                                          encrypted_payment_id)
+            || enote_ephemeral_pubkeys.empty())
+    {
+        error_msg = "Cant get enote ephemeral pubkeys of the transaction";
+        return false;
+    }
+
+    // outputs either share one D_e, or each has its own
+    if (enote_ephemeral_pubkeys.size() != 1
+            && enote_ephemeral_pubkeys.size() != tx.vout.size())
+    {
+        error_msg = fmt::format(
+                "Transaction has {:d} enote ephemeral pubkeys for {:d} outputs",
+                enote_ephemeral_pubkeys.size(), tx.vout.size());
+        return false;
+    }
+
+    return true;
+}
+
+} // namespace
+
+bool
+scan_carrot_tx_as_receiver(const transaction& tx,
+                           const address_parse_info& address_info,
+                           const secret_key& private_view_key,
+                           vector<carrot_output_info>& outputs_info,
+                           string& error_msg)
+{
+    outputs_info.assign(tx.vout.size(), carrot_output_info{});
+
+    vector<mx25519_pubkey> enote_ephemeral_pubkeys;
+    std::optional<carrot::encrypted_payment_id_t> encrypted_payment_id;
+
+    if (!load_carrot_tx_scan_data(tx, enote_ephemeral_pubkeys,
+                                  encrypted_payment_id, error_msg))
+    {
+        return false;
+    }
+
+    const carrot::view_incoming_key_ram_borrowed_device k_view_dev(
+            private_view_key);
+
+    // s_sr = k_v D_e, for each D_e
+    vector<mx25519_pubkey> shared_secrets(enote_ephemeral_pubkeys.size());
+    vector<bool> have_shared_secret(enote_ephemeral_pubkeys.size(), false);
+
+    for (size_t i = 0; i < enote_ephemeral_pubkeys.size(); ++i)
+    {
+        have_shared_secret[i] = carrot::try_make_carrot_shared_key_receiver(
+                k_view_dev, enote_ephemeral_pubkeys[i], shared_secrets[i]);
+    }
+
+    const public_key& address_spend_pubkey
+            = address_info.address.m_spend_public_key;
+
+    // the scan tells outputs to the main address from outputs to subaddresses
+    // by the main address's spend pubkey, which we only know if we were given
+    // the main address
+    const epee::span<const public_key> main_address_spend_pubkeys
+            = address_info.is_subaddress
+              ? epee::span<const public_key>{}
+              : epee::span<const public_key>(&address_spend_pubkey, 1);
+
+    const epee::span<const mx25519_pubkey> enote_ephemeral_pubkeys_span
+            = epee::to_span(enote_ephemeral_pubkeys);
+
+    for (size_t i = 0; i < tx.vout.size(); ++i)
+    {
+        const size_t d_e_idx = enote_ephemeral_pubkeys.size() == 1 ? 0 : i;
+
+        if (!have_shared_secret[d_e_idx])
+            continue;
+
+        const mx25519_pubkey& s_sender_receiver = shared_secrets[d_e_idx];
+
+        carrot_output_info& output_info = outputs_info[i];
+
+        crypto::secret_key sender_extension_g;
+        crypto::secret_key sender_extension_t;
+
+        if (tx.is_coinbase())
+        {
+            // coinbase outputs can only go to main addresses
+            if (address_info.is_subaddress)
+                continue;
+
+            carrot::CarrotCoinbaseEnoteV1 enote;
+
+            if (!carrot::try_load_carrot_coinbase_enote_from_transaction_v1(
+                    tx, enote_ephemeral_pubkeys_span, i, enote))
+            {
+                continue;
+            }
+
+            if (carrot::try_scan_carrot_coinbase_enote_receiver(
+                    enote,
+                    s_sender_receiver,
+                    address_spend_pubkey,
+                    address_info.address.m_view_public_key,
+                    sender_extension_g,
+                    sender_extension_t))
+            {
+                output_info.mine = true;
+                output_info.amount = enote.amount;
+            }
+
+            continue;
+        }
+
+        carrot::CarrotEnoteV1 enote;
+
+        if (!carrot::try_load_carrot_enote_from_transaction_v1(
+                tx, enote_ephemeral_pubkeys_span, i, enote))
+        {
+            continue;
+        }
+
+        public_key recovered_address_spend_pubkey;
+        uint64_t amount;
+        crypto::secret_key amount_blinding_factor;
+        carrot::payment_id_t payment_id;
+        carrot::CarrotEnoteType enote_type;
+
+        if (!carrot::try_scan_carrot_enote_external_receiver(
+                enote,
+                encrypted_payment_id,
+                s_sender_receiver,
+                main_address_spend_pubkeys,
+                k_view_dev,
+                sender_extension_g,
+                sender_extension_t,
+                recovered_address_spend_pubkey,
+                amount,
+                amount_blinding_factor,
+                payment_id,
+                enote_type))
+        {
+            continue;
+        }
+
+        // the output can be for another subaddress of the same view key
+        if (recovered_address_spend_pubkey != address_spend_pubkey)
+            continue;
+
+        output_info.mine = true;
+        output_info.amount = amount;
+
+        if (payment_id != carrot::null_payment_id)
+        {
+            output_info.payment_id
+                    = carrot::raw_byte_convert<crypto::hash8>(payment_id);
+        }
+    }
+
+    return true;
+}
+
+bool
+scan_carrot_tx_as_sender(const transaction& tx,
+                         const address_parse_info& address_info,
+                         const vector<secret_key>& tx_keys,
+                         vector<carrot_output_info>& outputs_info,
+                         string& error_msg)
+{
+    outputs_info.assign(tx.vout.size(), carrot_output_info{});
+
+    vector<mx25519_pubkey> enote_ephemeral_pubkeys;
+    std::optional<carrot::encrypted_payment_id_t> encrypted_payment_id;
+
+    if (!load_carrot_tx_scan_data(tx, enote_ephemeral_pubkeys,
+                                  encrypted_payment_id, error_msg))
+    {
+        return false;
+    }
+
+    // get_tx_key gives one d_e per D_e, in the order the D_e are in the extra
+    if (tx_keys.size() != enote_ephemeral_pubkeys.size())
+    {
+        error_msg = fmt::format(
+                "This transaction has {:d} enote ephemeral pubkey(s), "
+                "but {:d} tx private key(s) were provided",
+                enote_ephemeral_pubkeys.size(), tx_keys.size());
+        return false;
+    }
+
+    const carrot::CarrotDestinationV1 destination {
+        address_info.address.m_spend_public_key,
+        address_info.address.m_view_public_key,
+        address_info.is_subaddress,
+        address_info.has_payment_id
+            ? carrot::raw_byte_convert<carrot::payment_id_t>(
+                    address_info.payment_id)
+            : carrot::null_payment_id
+    };
+
+    const epee::span<const mx25519_pubkey> enote_ephemeral_pubkeys_span
+            = epee::to_span(enote_ephemeral_pubkeys);
+
+    for (size_t i = 0; i < tx.vout.size(); ++i)
+    {
+        const secret_key& enote_ephemeral_privkey
+                = tx_keys[enote_ephemeral_pubkeys.size() == 1 ? 0 : i];
+
+        carrot_output_info& output_info = outputs_info[i];
+
+        crypto::secret_key sender_extension_g;
+        crypto::secret_key sender_extension_t;
+
+        if (tx.is_coinbase())
+        {
+            // coinbase outputs can only go to main addresses
+            if (address_info.is_subaddress)
+                continue;
+
+            carrot::CarrotCoinbaseEnoteV1 enote;
+
+            if (!carrot::try_load_carrot_coinbase_enote_from_transaction_v1(
+                    tx, enote_ephemeral_pubkeys_span, i, enote))
+            {
+                continue;
+            }
+
+            if (carrot::try_scan_carrot_coinbase_enote_sender(
+                    enote,
+                    destination,
+                    enote_ephemeral_privkey,
+                    sender_extension_g,
+                    sender_extension_t))
+            {
+                output_info.mine = true;
+                output_info.amount = enote.amount;
+            }
+
+            continue;
+        }
+
+        carrot::CarrotEnoteV1 enote;
+
+        if (!carrot::try_load_carrot_enote_from_transaction_v1(
+                tx, enote_ephemeral_pubkeys_span, i, enote))
+        {
+            continue;
+        }
+
+        uint64_t amount;
+        crypto::secret_key amount_blinding_factor;
+        carrot::CarrotEnoteType enote_type;
+
+        // the payment id is only checked when an integrated address was
+        // given, so that a payment to an integrated address can also be
+        // proven with the standard address it is made of
+        if (carrot::try_scan_carrot_enote_external_sender(
+                enote,
+                encrypted_payment_id,
+                destination,
+                enote_ephemeral_privkey,
+                sender_extension_g,
+                sender_extension_t,
+                amount,
+                amount_blinding_factor,
+                enote_type,
+                address_info.has_payment_id))
+        {
+            output_info.mine = true;
+            output_info.amount = amount;
+
+            if (address_info.has_payment_id)
+                output_info.payment_id = address_info.payment_id;
+        }
+    }
+
+    return true;
+}
+
 }

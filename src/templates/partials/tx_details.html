@@ -5,7 +5,17 @@
     {{#enable_mixins_details}}
         <H5 style="margin:5px">Tx prefix hash: {{tx_prefix_hash}}</H5>
     {{/enable_mixins_details}}
-    <H5 style="margin:5px">Tx public key: <span id="tx_pub_key">{{tx_pub_key}}</span></H5>
+    {{#is_carrot}}
+        {{#per_output_enote_ephemeral_pubkeys}}
+            <H5 style="margin:5px">Enote ephemeral pubkeys: one per output{{^enable_mixins_details}} (shown in <a href="/{{base_url}}/tx/{{tx_hash}}/1">more details</a>){{/enable_mixins_details}}</H5>
+        {{/per_output_enote_ephemeral_pubkeys}}
+        {{^per_output_enote_ephemeral_pubkeys}}
+            <H5 style="margin:5px">Enote ephemeral pubkey: <span id="tx_pub_key">{{enote_ephemeral_pubkey}}</span></H5>
+        {{/per_output_enote_ephemeral_pubkeys}}
+    {{/is_carrot}}
+    {{^is_carrot}}
+        <H5 style="margin:5px">Tx public key: <span id="tx_pub_key">{{tx_pub_key}}</span></H5>
+    {{/is_carrot}}
     <span id="add_tx_pub_keys" style="display: none;">{{add_tx_pub_keys}}</span>
 
     {{#has_payment_id}}
@@ -43,8 +53,22 @@
         <tr>
             <td>Tx version: {{tx_version}}</td>
             <td>No of confirmations: {{confirmations}}</td>
-            <td>RingCT/type:  {{#is_ringct}}yes/{{rct_type}}{{/is_ringct}}{{^is_ringct}}no{{/is_ringct}}</td>
+            <td>RingCT/type:  {{#is_ringct}}yes/{{rct_type}}{{#is_fcmp_pp}} (FCMP++){{/is_fcmp_pp}}{{/is_ringct}}{{^is_ringct}}no{{/is_ringct}}</td>
         </tr>
+
+        {{#fcmp_pp_info_available}}
+        <tr>
+            <td>FCMP++ reference block: <a href="/{{base_url}}/block/{{fcmp_pp_reference_block}}">{{fcmp_pp_reference_block}}</a></td>
+            <td>FCMP++ tree layers: {{fcmp_pp_n_tree_layers}}</td>
+            <td>FCMP++ proof size: {{fcmp_pp_proof_size}} bytes</td>
+        </tr>
+        {{#fcmp_pp_have_tree_info}}
+        <tr>
+            <td colspan="2">FCMP++ tree root: {{fcmp_pp_tree_root}}</td>
+            <td>Outputs in the tree: {{fcmp_pp_n_leaf_tuples}}</td>
+        </tr>
+        {{/fcmp_pp_have_tree_info}}
+        {{/fcmp_pp_info_available}}
 
 
         <tr>
@@ -63,6 +87,12 @@
               <td>amount</td>
               <td>amount idx</td>
               <td>tag</td>
+              {{#is_carrot}}{{#enable_mixins_details}}
+                  <td>encrypted Janus anchor</td>
+                  {{#per_output_enote_ephemeral_pubkeys}}
+                      <td>enote ephemeral pubkey</td>
+                  {{/per_output_enote_ephemeral_pubkeys}}
+              {{/enable_mixins_details}}{{/is_carrot}}
           </tr>
           {{#outputs}}
           <tr>
@@ -70,6 +100,12 @@
               <td>{{amount}}</td>
               <td>{{amount_idx}} of {{num_outputs}}</td>
               <td>{{output_tag}}</td>
+              {{#is_carrot}}{{#enable_mixins_details}}
+                  <td>{{janus_anchor}}</td>
+                  {{#per_output_enote_ephemeral_pubkeys}}
+                      <td>{{enote_ephemeral_pubkey}}</td>
+                  {{/per_output_enote_ephemeral_pubkeys}}
+              {{/enable_mixins_details}}{{/is_carrot}}
           </tr>
           {{/outputs}}
       </table>
@@ -128,6 +164,7 @@
 
 
 {{#has_inputs}}
+    {{#has_ring_members}}
     {{#enable_mixins_details}}
       <h3>Inputs' ring size time scale (from {{min_mix_time}} till {{max_mix_time}};
         resolution: {{timescales_scale}} days{{#have_raw_tx}}; R - real ring member {{/have_raw_tx}})
@@ -140,6 +177,7 @@
         </ul>
       </div>
     {{/enable_mixins_details}}
+    {{/has_ring_members}}
 
     {{^inputs_xmr_sum_not_zero}}
         <h3>{{inputs_no}} input(s) for total of {{inputs_xmr_sum}} xmr</h3>
@@ -152,6 +190,13 @@
             <h3>{{inputs_no}} inputs(s) for total of at least {{inputs_xmr_sum}} xmr</h3>
         {{/have_any_unknown_amount}}
     {{/inputs_xmr_sum_not_zero}}
+
+    {{#is_fcmp_pp}}
+        <h5 style="margin-top: 2px">
+            FCMP++ inputs have no ring members: each of them spends one of all
+            the outputs in the FCMP++ tree{{#fcmp_pp_have_tree_info}} ({{fcmp_pp_n_leaf_tuples}} outputs as of block {{fcmp_pp_reference_block}}){{/fcmp_pp_have_tree_info}}
+        </h5>
+    {{/is_fcmp_pp}}
 
     {{#show_part_of_inputs}}
         <h5 style="margin-top: 2px">
@@ -179,6 +224,7 @@
           </td>
           <td>amount: {{amount}}</td>
        </tr>
+          {{^is_fcmp_pp_input}}
           <tr>
             <td colspan="2">
                 {{#enable_mixins_details}}
@@ -242,6 +288,7 @@
                 {{/enable_mixins_details}}
            </td>
          </tr>
+          {{/is_fcmp_pp_input}}
 
 <!--
         {{#with_ring_signatures}}

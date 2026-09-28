@@ -117,6 +117,28 @@ if (EXISTS ${MONERO_BUILD_DIR}/src/serialization/libserialization.a)
                         PROPERTY IMPORTED_LOCATION ${MONERO_BUILD_DIR}/src/serialization/libserialization.a)
 endif()
 
+# FCMP++/Carrot libs (monero v0.19)
+if (EXISTS ${MONERO_BUILD_DIR}/src/carrot_core/libcarrot_core.a)
+        message(STATUS FindMonero " found libcarrot_core.a")
+        add_library(carrot_core STATIC IMPORTED)
+        set_property(TARGET carrot_core
+                        PROPERTY IMPORTED_LOCATION ${MONERO_BUILD_DIR}/src/carrot_core/libcarrot_core.a)
+endif()
+
+if (EXISTS ${MONERO_BUILD_DIR}/src/carrot_impl/libcarrot_impl.a)
+        message(STATUS FindMonero " found libcarrot_impl.a")
+        add_library(carrot_impl STATIC IMPORTED)
+        set_property(TARGET carrot_impl
+                        PROPERTY IMPORTED_LOCATION ${MONERO_BUILD_DIR}/src/carrot_impl/libcarrot_impl.a)
+endif()
+
+if (EXISTS ${MONERO_BUILD_DIR}/external/mx25519/libmx25519.a)
+        message(STATUS FindMonero " found libmx25519.a")
+        add_library(mx25519 STATIC IMPORTED)
+        set_property(TARGET mx25519
+                        PROPERTY IMPORTED_LOCATION ${MONERO_BUILD_DIR}/external/mx25519/libmx25519.a)
+endif()
+
 
 message(STATUS ${MONERO_SOURCE_DIR}/build)
 
@@ -133,4 +155,5 @@ include_directories(
                 ${MONERO_SOURCE_DIR}/external/db_drivers/liblmdb
                 ${MONERO_SOURCE_DIR}/generated_include/crypto/wallet
 		${MONERO_SOURCE_DIR}/external/polyseed/include
-		${MONERO_SOURCE_DIR}/external/utf8proc)
+		${MONERO_SOURCE_DIR}/external/utf8proc
+		${MONERO_SOURCE_DIR}/external/mx25519/include)

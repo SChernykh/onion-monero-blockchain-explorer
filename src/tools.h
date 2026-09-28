@@ -386,6 +386,65 @@ make_difficulty(uint64_t low, uint64_t high);
 string
 to_string_uint128(const boost::multiprecision::uint128_t &amount);
 
+
+/*
+ * FCMP++ and Carrot (Monero v0.19) helpers
+ */
+
+// true for txs whose outputs use the Carrot addressing protocol
+bool
+is_carrot_tx(const transaction& tx);
+
+// true for txs whose inputs are spent with FCMP++ proofs, i.e., have no rings
+bool
+is_fcmp_pp_tx(const transaction& tx);
+
+// view tag of an output as hex, if it has one: one byte for pre-Carrot
+// outputs, three bytes for Carrot outputs
+boost::optional<string>
+get_output_view_tag_str(const tx_out& txout);
+
+// encrypted Janus anchor of a Carrot output as hex
+boost::optional<string>
+get_output_janus_anchor_str(const tx_out& txout);
+
+// enote ephemeral pubkeys D_e (X25519 points) of a Carrot tx: either one
+// shared by all the outputs, or one per output
+vector<mx25519_pubkey>
+get_carrot_enote_ephemeral_pubkeys(const transaction& tx);
+
+// what scanning a Carrot tx found about one of its outputs
+struct carrot_output_info
+{
+    bool mine {false};
+    uint64_t amount {0};
+
+    // decrypted payment id, only for outputs to integrated addresses
+    boost::optional<crypto::hash8> payment_id;
+};
+
+// Scan the outputs of a Carrot tx as their receiver, i.e., with the private
+// viewkey of the given address. Outputs to the address are marked as mine
+// and get their amounts and payment id decoded.
+bool
+scan_carrot_tx_as_receiver(const transaction& tx,
+                           const address_parse_info& address_info,
+                           const secret_key& private_view_key,
+                           vector<carrot_output_info>& outputs_info,
+                           string& error_msg);
+
+// Scan the outputs of a Carrot tx as their sender, i.e., with the enote
+// ephemeral private keys d_e of the tx, which is what get_tx_key returns for
+// Carrot txs: either one key shared by all the outputs, or one per output.
+// Outputs sent to the given address are marked as mine and get their
+// amounts decoded.
+bool
+scan_carrot_tx_as_sender(const transaction& tx,
+                         const address_parse_info& address_info,
+                         const vector<secret_key>& tx_keys,
+                         vector<carrot_output_info>& outputs_info,
+                         string& error_msg);
+
 }
 
 #endif //XMREG01_TOOLS_H
