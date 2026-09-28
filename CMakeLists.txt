@@ -102,7 +102,7 @@ FIND_PATH(UNBOUND_INCLUDE_DIR
 )
 
 find_library (UNBOUND_LIBRARY unbound)
-if (WIN32 OR (${UNBOUND_LIBRARY} STREQUAL "UNBOUND_LIBRARY-NOTFOUND"))
+if (${UNBOUND_LIBRARY} STREQUAL "UNBOUND_LIBRARY-NOTFOUND")
     add_library(unbound STATIC IMPORTED)
     set_property(TARGET unbound PROPERTY IMPORTED_LOCATION ${MONERO_BUILD_DIR}/external/unbound/libunbound.a)
 endif()
@@ -171,11 +171,13 @@ set(LIBRARIES
         myext
         mstch
         wallet
+        device_trezor
         cryptonote_core
         carrot_impl
         carrot_core
         cryptonote_basic
         cryptonote_protocol
+        net
         cryptonote_format_utils_basic
         blockchain_db
         device
@@ -234,7 +236,9 @@ if (WIN32)
             wsock32
             ntdll
             ws2_32
-            Iphlpapi
+            iphlpapi
+            crypt32
+            userenv
             )
 else()
     set(LIBRARIES ${LIBRARIES} dl)
